@@ -40,7 +40,7 @@ def parse_arguments():
     parser.add_argument('--inventory-skew', type=float, default=0.0, help='永續倉位偏移調整係數 (0-1)')
     parser.add_argument('--stop-loss', type=float, help='永續倉位止損觸發值 (以報價資產計價)')
     parser.add_argument('--take-profit', type=float, help='永續倉位止盈觸發值 (以報價資產計價)')
-    parser.add_argument('--strategy', choices=['standard', 'maker_hedge', 'grid', 'perp_grid'], default='standard', help='策略選擇 (standard, maker_hedge, grid 或 perp_grid)')
+    parser.add_argument('--strategy', choices=['standard', 'maker_hedge', 'grid', 'perp_grid', 'long_short_hedge'], default='standard', help='策略選擇 (standard, maker_hedge, grid, perp_grid 或 long_short_hedge)')
 
     # 網格策略參數
     parser.add_argument('--grid-upper', type=float, help='網格上限價格')
@@ -50,6 +50,17 @@ def parse_arguments():
     parser.add_argument('--price-range', type=float, default=5.0, help='自動模式下的價格範圍百分比 (默認: 5.0)')
     parser.add_argument('--grid-mode', choices=['arithmetic', 'geometric'], default='arithmetic', help='網格模式 (arithmetic 或 geometric)')
     parser.add_argument('--grid-type', choices=['neutral', 'long', 'short'], default='neutral', help='永續網格類型 (neutral, long 或 short)')
+
+    # Long-Short Hedge 策略參數
+    parser.add_argument('--short-size', type=float, default=2.0, help='Base short position size (ETH)')
+    parser.add_argument('--grid-long-size', type=float, default=0.02, help='Long size per grid order (ETH)')
+    parser.add_argument('--grid-leverage', type=float, default=20.0, help='Leverage for grid longs')
+    parser.add_argument('--grid-spacing', type=float, default=0.10, help='Grid spacing in USD')
+    parser.add_argument('--grid-levels', type=int, default=10, help='Grid levels each side')
+    parser.add_argument('--grid-tp', type=float, default=1.17, help='Take profit offset in USD')
+    parser.add_argument('--volatility', type=float, default=0.0, help='User-input volatility for adaptive spacing')
+    parser.add_argument('--funding-pause', type=float, default=0.0, help='Pause threshold for funding rate')
+    parser.add_argument('--liq-buffer', type=float, default=0.05, help='Liquidation proximity buffer (0.05 = 5%)')
 
     # 數據庫選項
     parser.add_argument('--enable-db', dest='enable_db', action='store_true', help='啟用資料庫寫入功能')
@@ -298,6 +309,40 @@ def main():
                     logger.info(f"  止損閾值: {args.stop_loss} {market_maker.quote_asset}")
                 if args.take_profit is not None:
                     logger.info(f"  止盈閾值: {args.take_profit} {market_maker.quote_asset}")
+
+            elif strategy_name == 'long_short_hedge':
+                # Long Grid Short Hedge - Zoomex only
+                if exchange != 'zoomex':
+                    logger.error("long_short_hedge 策略只支援 Zoomex 交易所")
+                    sys.exit(1)
+
+                from strategies.long_grid_short_hedge import LongGridShortHedge
+
+                logger.info("啟動 Long Grid Short Hedge 策略")
+                logger.info(f"  Anchor Short: {args.short_size} ETH")
+                logger.info(f"  Grid Long Size: {args.grid_long_size} ETH @ {args.grid_leverage}× leverage")
+                logger.info(f"  Grid Levels: {args.grid_levels} each side")
+                logger.info(f"  Grid Spacing: ${args.grid_spacing}")
+                logger.info(f"  Take Profit Offset: ${args.grid_tp}")
+                logger.info(f"  Volatility: {args.volatility}")
+
+                market_maker = LongGridShortHedge(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    symbol=args.symbol,
+                    short_size=args.short_size,
+                    grid_long_size=args.grid_long_size,
+                    grid_leverage=args.grid_leverage,
+                    grid_spacing=args.grid_spacing,
+                    grid_levels=args.grid_levels,
+                    take_profit=args.grid_tp,
+                    volatility=args.volatility,
+                    funding_pause_threshold=args.funding_pause,
+                    liquidation_buffer=args.liq_buffer,
+                    exchange='zoomex',
+                    exchange_config=exchange_config,
+                    enable_database=args.enable_db,
+                )
 
             elif market_type == 'perp':
                 logger.info(f"啟動永續合約做市模式 (策略: {strategy_name}, 交易所: {exchange})")

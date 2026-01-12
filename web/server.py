@@ -290,6 +290,42 @@ def start_bot():
                     enable_database=enable_db,
                     market_type='perp'
                 )
+            elif strategy_name == 'long_short_hedge':
+                # Long Grid Short Hedge 策略 (僅 Zoomex)
+                if exchange != 'zoomex':
+                    return jsonify({'success': False, 'message': 'Long Short Hedge 策略只支援 Zoomex'}), 400
+                
+                from strategies.long_grid_short_hedge import LongGridShortHedge
+                
+                # 獲取策略特定參數
+                short_size = float(data.get('short_size', 2.0))
+                grid_long_size = float(data.get('grid_long_size', 0.02))
+                grid_leverage = float(data.get('grid_leverage', 20.0))
+                grid_spacing = float(data.get('grid_spacing', 0.10))
+                grid_levels = int(data.get('grid_levels', 10))
+                grid_tp = float(data.get('grid_tp', 1.17))
+                
+                logger.info(f"啟動 Long Grid Short Hedge 策略")
+                logger.info(f"  Anchor Short: {short_size} ETH")
+                logger.info(f"  Grid Long Size: {grid_long_size} ETH @ {grid_leverage}× leverage")
+                logger.info(f"  Grid Levels: {grid_levels} each side")
+                logger.info(f"  Grid Spacing: ${grid_spacing}")
+                logger.info(f"  Take Profit Offset: ${grid_tp}")
+                
+                current_strategy = LongGridShortHedge(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    symbol=symbol,
+                    short_size=short_size,
+                    grid_long_size=grid_long_size,
+                    grid_leverage=grid_leverage,
+                    grid_spacing=grid_spacing,
+                    grid_levels=grid_levels,
+                    take_profit=grid_tp,
+                    exchange='zoomex',
+                    exchange_config=exchange_config,
+                    enable_database=enable_db,
+                )
             else:
                 # 永續合約標準策略
                 current_strategy = PerpetualMarketMaker(

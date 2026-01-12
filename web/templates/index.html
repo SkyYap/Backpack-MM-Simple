@@ -235,6 +235,7 @@
                                         <option value="standard">標準做市</option>
                                         <option value="maker_hedge">對沖做市</option>
                                         <option value="grid">網格交易</option>
+                                        <option value="long_short_hedge">Long Grid Short Hedge</option>
                                     </select>
                                 </div>
 
@@ -342,9 +343,11 @@
                                     <div class="form-field leverage-field" id="leverageField" style="display: none;">
                                         <label class="field-label">槓桿倍數</label>
                                         <div class="leverage-input-group">
-                                            <input type="number" id="leverage" name="leverage" class="field-input leverage-input"
-                                                value="20" min="1" max="100" step="1">
-                                            <button type="button" id="setLeverageBtn" class="btn btn-secondary btn-small">
+                                            <input type="number" id="leverage" name="leverage"
+                                                class="field-input leverage-input" value="20" min="1" max="100"
+                                                step="1">
+                                            <button type="button" id="setLeverageBtn"
+                                                class="btn btn-secondary btn-small">
                                                 設置槓桿
                                             </button>
                                         </div>
@@ -419,6 +422,54 @@
                                             <option value="long">做多網格</option>
                                             <option value="short">做空網格</option>
                                         </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Long Short Hedge Strategy Parameters -->
+                            <div id="longShortHedgeParams" class="config-block flex-1" style="display: none;">
+                                <h3 class="block-title">Long Grid Short Hedge 參數</h3>
+                                <div class="form-grid-compact">
+                                    <div class="form-field">
+                                        <label class="field-label">Anchor Short Size (ETH)</label>
+                                        <input type="number" id="short_size" name="short_size" class="field-input"
+                                            value="2.0" step="0.01" min="0.01">
+                                        <small class="field-hint">基礎對沖空單大小</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Grid Long Size (ETH)</label>
+                                        <input type="number" id="grid_long_size" name="grid_long_size"
+                                            class="field-input" value="0.02" step="0.001" min="0.001">
+                                        <small class="field-hint">每個網格多單大小</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Grid Leverage</label>
+                                        <input type="number" id="grid_leverage" name="grid_leverage" class="field-input"
+                                            value="20" min="1" max="100" step="1">
+                                        <small class="field-hint">網格多單槓桿倍數</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Grid Spacing (USD)</label>
+                                        <input type="number" id="grid_spacing_hedge" name="grid_spacing"
+                                            class="field-input" value="0.10" step="0.01" min="0.01">
+                                        <small class="field-hint">網格間距 (美元)</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Grid Levels</label>
+                                        <input type="number" id="grid_levels" name="grid_levels" class="field-input"
+                                            value="10" min="1" max="100" step="1">
+                                        <small class="field-hint">每側網格層數</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Take Profit (USD)</label>
+                                        <input type="number" id="grid_tp" name="grid_tp" class="field-input"
+                                            value="1.17" step="0.01" min="0.01">
+                                        <small class="field-hint">止盈距離 (美元)</small>
                                     </div>
                                 </div>
                             </div>

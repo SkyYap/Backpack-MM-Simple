@@ -224,6 +224,12 @@ function toggleStrategyParams() {
     const strategy = strategySelect.value;
     gridParams.style.display = strategy === 'grid' ? 'block' : 'none';
 
+    // Long Short Hedge 參數
+    const longShortHedgeParams = document.getElementById('longShortHedgeParams');
+    if (longShortHedgeParams) {
+        longShortHedgeParams.style.display = strategy === 'long_short_hedge' ? 'block' : 'none';
+    }
+
     // 顯示正確的市場參數區塊
     toggleMarketTypeParams();
 
@@ -233,6 +239,15 @@ function toggleStrategyParams() {
     // 更新永續合約參數欄位
     if (marketTypeSelect.value === 'perp') {
         togglePerpFields();
+    }
+
+    // Long Short Hedge 策略強制 Zoomex 和 perp 市場
+    if (strategy === 'long_short_hedge') {
+        exchangeSelect.value = 'zoomex';
+        marketTypeSelect.value = 'perp';
+        adjustMarketTypeOptions();
+        toggleLeverageField();
+        toggleIntervalField();
     }
 }
 
@@ -562,6 +577,25 @@ async function startBot() {
             if (data.strategy === 'maker_hedge' && !data.spread) {
                 data.spread = 0.01;
             }
+        }
+    }
+
+    // Long Short Hedge 策略參數
+    if (data.strategy === 'long_short_hedge') {
+        data.short_size = parseFloat(formData.get('short_size')) || 2.0;
+        data.grid_long_size = parseFloat(formData.get('grid_long_size')) || 0.02;
+        data.grid_leverage = parseFloat(formData.get('grid_leverage')) || 20.0;
+        data.grid_spacing = parseFloat(document.getElementById('grid_spacing_hedge')?.value) || 0.10;
+        data.grid_levels = parseInt(formData.get('grid_levels')) || 10;
+        data.grid_tp = parseFloat(formData.get('grid_tp')) || 1.17;
+
+        // 強制 Zoomex 和 perp
+        data.exchange = 'zoomex';
+        data.market_type = 'perp';
+
+        // 設默認值
+        if (!data.spread) {
+            data.spread = 0.01;
         }
     }
 
