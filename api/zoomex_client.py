@@ -265,6 +265,69 @@ class ZoomexClient(BaseExchangeClient):
             "updateId": result.get("u")
         }
 
+    def get_klines(self, symbol: str, interval: str = "15", limit: int = 50) -> List[Dict]:
+        """Get kline/candlestick data for ATR calculation.
+        
+        Endpoint: GET /cloud/trade/v3/market/kline
+        
+        Args:
+            symbol: Trading pair (e.g., "ETHUSDT")
+            interval: Kline interval - "1", "3", "5", "15", "30", "60", "120", "240", "D", "W"
+            limit: Number of candles (max 200, default 50)
+            
+        Returns:
+            List of dicts with keys: open_time, open, high, low, close, volume, turnover
+            Sorted in ascending order by time (oldest first).
+        """
+        endpoint = "/cloud/trade/v3/market/kline"
+        
+        # Map common interval formats to Zoomex format
+        interval_mapping = {
+            "1m": "1",
+            "3m": "3",
+            "5m": "5",
+            "15m": "15",
+            "30m": "30",
+            "1h": "60",
+            "2h": "120",
+            "4h": "240",
+            "1d": "D",
+            "1w": "W",
+        }
+        api_interval = interval_mapping.get(interval, interval)
+        
+        params = {
+            "category": self.category,
+            "symbol": symbol,
+            "interval": api_interval,
+            "limit": str(min(limit, 200))
+        }
+        
+        response = self.make_request("GET", endpoint, params=params)
+        
+        if "error" in response:
+            return response
+        
+        result = response.get("result", {})
+        kline_list = result.get("list", [])
+        
+        # Parse klines: [[startTime, open, high, low, close, volume, turnover], ...]
+        # API returns in reverse order (newest first), so we reverse to get oldest first
+        klines = []
+        for kline in reversed(kline_list):
+            if len(kline) >= 6:
+                klines.append({
+                    "open_time": int(kline[0]),
+                    "open": float(kline[1]),
+                    "high": float(kline[2]),
+                    "low": float(kline[3]),
+                    "close": float(kline[4]),
+                    "volume": float(kline[5]),
+                    "turnover": float(kline[6]) if len(kline) > 6 else 0.0,
+                })
+        
+        return klines
+
     def get_markets(self) -> Dict:
         """Get all available trading instruments.
         
