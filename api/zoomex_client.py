@@ -1,8 +1,12 @@
 """
 Zoomex Exchange REST API Client Module
 
-Implements the Zoomex V3 API for perpetual futures trading.
+Implements the Zoomex V3 API for perpetual futures and spot trading.
 API is similar to Bybit V5 API.
+
+Supports:
+- Linear perpetual futures (category: linear)
+- Spot trading (category: spot) with conditional orders
 """
 import json
 import time
@@ -922,3 +926,399 @@ class ZoomexClient(BaseExchangeClient):
     def get_collateral(self, subaccount_id=None) -> Dict:
         """Get collateral info - alias for get_balance."""
         return self.get_balance()
+
+    # ------------------------------------------------------------------
+    # Spot Trading Methods
+    # ------------------------------------------------------------------
+
+    def get_spot_balance(self) -> Dict:
+        """Get spot account balance.
+        
+        Endpoint: GET /cloud/trade/v3/account/wallet-balance
+        Uses accountType: UNIFIED for spot trading.
+        Returns dict keyed by asset name.
+        """
+        endpoint = "/cloud/trade/v3/account/wallet-balance"
+        params = {"accountType": "UNIFIED"}  # UNIFIED for spot
+        
+        response = self.make_request("GET", endpoint, params=params)
+        
+        if "error" in response:
+            return response
+
+        result = response.get("result", {})
+        account_list = result.get("list", [])
+        
+        if not account_list:
+            return {}
+
+        account = account_list[0]
+        coins = account.get("coin", [])
+        
+        # Return dict keyed by asset name for compatibility with strategies
+        balances = {}
+        for coin in coins:
+            asset = coin.get("coin")
+            if asset:
+                balances[asset] = {
+                    "asset": asset,
+                    "available": float(coin.get("availableToWithdraw", 0) or 0),
+                    "locked": float(coin.get("locked", 0) or 0),
+                    "total": float(coin.get("walletBalance", 0) or 0),
+                    "free": float(coin.get("free", 0) or coin.get("availableToWithdraw", 0) or 0),
+                }
+        
+        return balances
+
+    def get_spot_symbol_info(self, symbol: str) -> Optional[Dict]:
+        """Get spot symbol information including precision and limits.
+        
+        Args:
+            symbol: Trading pair (e.g., "MNTUSDT")
+            
+        Returns:
+            Dict with symbol info or None if not found.
+        """
+        params = {
+            "category": "spot",
+            "symbol": symbol
+        }
+        
+        response = self.make_request(
+            method="GET",
+            endpoint="/cloud/trade/v3/market/instruments-info",
+            params=params
+        )
+        
+        if "error" in response:
+            logger.error(f"Failed to get spot symbol info: {response['error']}")
+            return None
+            
+        result = response.get("result", {})
+        instruments = result.get("list", [])
+        
+        if not instruments:
+            return None
+            
+        info = instruments[0]
+        
+        # Parse precision from filters
+        lot_size = info.get("lotSizeFilter", {})
+        price_filter = info.get("priceFilter", {})
+        
+        # Calculate precision from step sizes
+        qty_step = lot_size.get("basePrecision", lot_size.get("qtyStep", "0.0001"))
+        tick_size = price_filter.get("tickSize", "0.0001")
+        
+        # Count decimal places
+        def count_decimals(value_str):
+            if '.' in str(value_str):
+                return len(str(value_str).split('.')[1].rstrip('0'))
+            return 0
+        
+        base_precision = count_decimals(qty_step)
+        quote_precision = count_decimals(tick_size)
+        
+        return {
+            "symbol": symbol,
+            "base_asset": info.get("baseCoin", symbol[:-4] if symbol.endswith("USDT") else symbol),
+            "quote_asset": info.get("quoteCoin", "USDT"),
+            "base_precision": base_precision,
+            "quote_precision": quote_precision,
+            "tick_size": float(tick_size),
+            "min_order_size": float(lot_size.get("minOrderQty", "0.0001")),
+            "max_order_size": float(lot_size.get("maxOrderQty", "1000000")),
+            "qty_step": float(qty_step),
+            "raw": info
+        }
+
+    def execute_spot_order(self, order_details: Dict) -> Dict:
+        """Place a spot order (regular or conditional).
+        
+        Endpoint: POST /cloud/trade/v3/order/create
+        
+        Args:
+            order_details: Dict with keys:
+                - symbol: Trading pair (e.g., "MNTUSDT")
+                - side: "Buy" or "Sell"
+                - orderType: "Market" or "Limit"
+                - qty: Order quantity
+                - price: Order price (required for limit orders)
+                - timeInForce: "GTC", "IOC", "FOK", "PostOnly"
+                - orderLinkId: Custom order ID (optional)
+                
+                For conditional orders (orderFilter: "StopOrder"):
+                - triggerPrice: Price that activates the order
+                - triggerDirection: 1 (rise to) or 2 (fall to)
+                - orderFilter: "StopOrder" for conditional, "Order" for regular
+        """
+        endpoint = "/cloud/trade/v3/order/create"
+        
+        # Normalize side: convert "Bid"/"Ask" to "Buy"/"Sell"
+        raw_side = order_details.get("side", "")
+        side_mapping = {
+            "Bid": "Buy", "bid": "Buy", "BID": "Buy",
+            "Ask": "Sell", "ask": "Sell", "ASK": "Sell",
+            "buy": "Buy", "BUY": "Buy",
+            "sell": "Sell", "SELL": "Sell",
+        }
+        normalized_side = side_mapping.get(raw_side, raw_side)
+        
+        # Normalize quantity: accept both "qty" and "quantity"
+        qty = order_details.get("qty") or order_details.get("quantity")
+        
+        # Build order payload
+        data = {
+            "category": "spot",
+            "symbol": order_details.get("symbol"),
+            "side": normalized_side,
+            "orderType": order_details.get("orderType", "Limit"),
+            "qty": str(qty),
+        }
+        
+        # Price (required for limit orders)
+        if order_details.get("price"):
+            data["price"] = str(order_details["price"])
+        
+        # Time in force
+        if order_details.get("timeInForce"):
+            data["timeInForce"] = order_details["timeInForce"]
+        else:
+            data["timeInForce"] = "GTC"
+        
+        # Order filter: "Order" for regular, "StopOrder" for conditional
+        order_filter = order_details.get("orderFilter", "Order")
+        data["orderFilter"] = order_filter
+        
+        # Conditional order parameters
+        if order_filter == "StopOrder":
+            if order_details.get("triggerPrice"):
+                data["triggerPrice"] = str(order_details["triggerPrice"])
+            if order_details.get("triggerDirection"):
+                data["triggerDirection"] = order_details["triggerDirection"]
+        
+        # Custom order ID
+        if order_details.get("orderLinkId"):
+            data["orderLinkId"] = order_details["orderLinkId"]
+        
+        logger.debug(f"Placing spot order: {data}")
+        response = self.make_request("POST", endpoint, data=data)
+        
+        if "error" in response:
+            return response
+
+        result = response.get("result", {})
+        order_id = result.get("orderId")
+        return {
+            "id": order_id,
+            "orderId": order_id,
+            "orderLinkId": result.get("orderLinkId"),
+            "success": True,
+            "raw": result
+        }
+
+    def get_spot_open_orders(self, symbol: Optional[str] = None, order_filter: str = "Order") -> Any:
+        """Get open spot orders.
+        
+        Endpoint: GET /cloud/trade/v3/order/realtime
+        
+        Args:
+            symbol: Trading pair (optional)
+            order_filter: "Order" for regular, "StopOrder" for conditional
+            
+        Returns:
+            List of orders for compatibility with strategies.
+        """
+        endpoint = "/cloud/trade/v3/order/realtime"
+        params = {
+            "category": "spot",
+            "orderFilter": order_filter,
+            "openOnly": "0"  # Open orders only
+        }
+        
+        if symbol:
+            params["symbol"] = symbol
+        
+        response = self.make_request("GET", endpoint, params=params)
+        
+        if "error" in response:
+            return response
+
+        result = response.get("result", {})
+        order_list = result.get("list", [])
+        
+        # Return list directly for compatibility with strategies
+        orders = []
+        for order in order_list:
+            order_id = order.get("orderId")
+            orders.append({
+                "id": order_id,
+                "orderId": order_id,
+                "orderLinkId": order.get("orderLinkId"),
+                "symbol": order.get("symbol"),
+                "side": order.get("side"),
+                "orderType": order.get("orderType"),
+                "price": order.get("price"),
+                "qty": order.get("qty"),
+                "filledQty": order.get("cumExecQty"),
+                "status": order.get("orderStatus"),
+                "timeInForce": order.get("timeInForce"),
+                "triggerPrice": order.get("triggerPrice"),
+                "orderFilter": order.get("orderFilter"),
+                "createdTime": order.get("createdTime"),
+                "raw": order
+            })
+        
+        return orders
+
+    def cancel_spot_order(self, order_id: str, symbol: str, order_filter: str = "Order") -> Dict:
+        """Cancel a specific spot order.
+        
+        Endpoint: POST /cloud/trade/v3/order/cancel
+        
+        Args:
+            order_id: Order ID to cancel
+            symbol: Trading pair
+            order_filter: "Order" for regular, "StopOrder" for conditional
+        """
+        endpoint = "/cloud/trade/v3/order/cancel"
+        data = {
+            "category": "spot",
+            "symbol": symbol,
+            "orderId": order_id,
+            "orderFilter": order_filter
+        }
+        
+        response = self.make_request("POST", endpoint, data=data)
+        
+        if "error" in response:
+            return response
+
+        result = response.get("result", {})
+        return {
+            "orderId": result.get("orderId"),
+            "orderLinkId": result.get("orderLinkId"),
+            "success": True,
+            "raw": result
+        }
+
+    def cancel_all_spot_orders(self, symbol: str = None, order_filter: str = "Order") -> Dict:
+        """Cancel all open spot orders.
+        
+        Endpoint: POST /cloud/trade/v3/order/cancel-all
+        
+        Args:
+            symbol: Trading pair (optional)
+            order_filter: "Order" for regular, "StopOrder" for conditional
+        """
+        endpoint = "/cloud/trade/v3/order/cancel-all"
+        data = {
+            "category": "spot",
+            "orderFilter": order_filter
+        }
+        
+        if symbol:
+            data["symbol"] = symbol
+        
+        response = self.make_request("POST", endpoint, data=data)
+        
+        if "error" in response:
+            return response
+
+        result = response.get("result", {})
+        return {
+            "success": True,
+            "list": result.get("list", []),
+            "raw": result
+        }
+
+    def get_spot_ticker(self, symbol: str) -> Dict:
+        """Get spot ticker information for a symbol.
+        
+        Endpoint: GET /cloud/trade/v3/market/tickers
+        """
+        endpoint = "/cloud/trade/v3/market/tickers"
+        params = {
+            "category": "spot",
+            "symbol": symbol
+        }
+        
+        response = self.make_request("GET", endpoint, params=params)
+        
+        if "error" in response:
+            return response
+
+        # Parse ticker data
+        result_data = response.get("result", {})
+        ticker_list = result_data.get("list", [])
+        
+        if not ticker_list:
+            return {"error": "No ticker data returned"}
+
+        ticker = ticker_list[0]
+        return {
+            "symbol": ticker.get("symbol"),
+            "lastPrice": ticker.get("lastPrice"),
+            "bidPrice": ticker.get("bid1Price"),
+            "askPrice": ticker.get("ask1Price"),
+            "volume": ticker.get("volume24h"),
+            "change24h": ticker.get("price24hPcnt"),
+            "highPrice24h": ticker.get("highPrice24h"),
+            "lowPrice24h": ticker.get("lowPrice24h"),
+            "raw": ticker
+        }
+
+    def get_spot_fill_history(self, symbol: Optional[str] = None, limit: int = 50) -> List[Dict]:
+        """Get spot trade execution history.
+        
+        Endpoint: GET /cloud/trade/v3/execution/list
+        
+        Args:
+            symbol: Trading pair (optional)
+            limit: Max number of records (default 50)
+            
+        Returns:
+            List of fills for compatibility with strategies.
+        """
+        params = {
+            "category": "spot",
+            "limit": str(limit)
+        }
+        if symbol:
+            params["symbol"] = symbol
+            
+        response = self.make_request(
+            method="GET",
+            endpoint="/cloud/trade/v3/execution/list",
+            params=params
+        )
+        
+        if "error" in response:
+            return response
+            
+        fills = []
+        result = response.get("result", {})
+        fill_list = result.get("list", [])
+        
+        for fill in fill_list:
+            side = fill.get("side", "").upper()
+            is_maker = fill.get("isMaker", False)
+            
+            fills.append({
+                "id": fill.get("execId"),
+                "fill_id": fill.get("execId"),
+                "order_id": fill.get("orderId"),
+                "symbol": fill.get("symbol"),
+                "side": "BUY" if side == "BUY" else "SELL",
+                "price": float(fill.get("execPrice", 0)),
+                "quantity": float(fill.get("execQty", 0)),
+                "size": float(fill.get("execQty", 0)),
+                "is_maker": is_maker,
+                "fee": float(fill.get("execFee", 0)),
+                "fee_asset": fill.get("feeCurrency", ""),
+                "timestamp": fill.get("execTime"),
+                "raw": fill
+            })
+        
+        return fills
+

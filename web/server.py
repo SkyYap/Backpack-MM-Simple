@@ -383,6 +383,46 @@ def start_bot():
                     enable_database=enable_db,
                     market_type='spot'
                 )
+            elif strategy_name == 'spot_buy_grid':
+                # Spot Buy Grid - Zoomex spot only
+                if exchange != 'zoomex':
+                    return jsonify({'success': False, 'message': 'Spot Buy Grid 策略只支援 Zoomex 現貨'}), 400
+                
+                from strategies.spot_buy_grid import SpotBuyGrid
+                
+                # Update exchange config for spot
+                exchange_config['category'] = 'spot'
+                
+                # Parse spot buy grid parameters
+                grid_spacing = float(data.get('grid_spacing', 0.01))
+                maximum_order = int(data.get('maximum_order', 5))
+                order_quantity = float(data.get('order_quantity') or data.get('quantity') or 0)
+                trigger_offset = float(data.get('trigger_offset', 0.001))
+                tp_offset = float(data.get('tp_offset', 0.02))
+                
+                if not order_quantity:
+                    return jsonify({'success': False, 'message': 'Spot Buy Grid 需要指定訂單數量'}), 400
+                
+                logger.info(f"啟動 Spot Buy Grid 策略 (Zoomex 現貨)")
+                logger.info(f"  Grid Spacing: {grid_spacing}")
+                logger.info(f"  Max Orders per Band: {maximum_order}")
+                logger.info(f"  Order Quantity: {order_quantity}")
+                logger.info(f"  Trigger Offset: {trigger_offset}")
+                logger.info(f"  Take Profit Offset: {tp_offset}")
+                
+                current_strategy = SpotBuyGrid(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    symbol=symbol,
+                    grid_spacing=grid_spacing,
+                    maximum_order=maximum_order,
+                    order_quantity=order_quantity,
+                    trigger_offset=trigger_offset,
+                    take_profit_offset=tp_offset,
+                    exchange='zoomex',
+                    exchange_config=exchange_config,
+                    enable_database=enable_db,
+                )
             else:
                 # 現貨標準策略
                 current_strategy = MarketMaker(
@@ -508,7 +548,7 @@ def get_config():
     return jsonify({
         'exchanges': ['backpack', 'aster', 'paradex', 'lighter', 'apex', 'zoomex'],
         'market_types': ['spot', 'perp'],
-        'strategies': ['standard', 'maker_hedge', 'grid'],
+        'strategies': ['standard', 'maker_hedge', 'grid', 'long_short_hedge', 'spot_buy_grid'],
         'env_configured': {
             'backpack': bool(os.getenv('BACKPACK_KEY') and os.getenv('BACKPACK_SECRET')),
             'aster': bool(os.getenv('ASTER_API_KEY') and os.getenv('ASTER_SECRET_KEY')),

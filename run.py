@@ -40,7 +40,7 @@ def parse_arguments():
     parser.add_argument('--inventory-skew', type=float, default=0.0, help='永續倉位偏移調整係數 (0-1)')
     parser.add_argument('--stop-loss', type=float, help='永續倉位止損觸發值 (以報價資產計價)')
     parser.add_argument('--take-profit', type=float, help='永續倉位止盈觸發值 (以報價資產計價)')
-    parser.add_argument('--strategy', choices=['standard', 'maker_hedge', 'grid', 'perp_grid', 'long_short_hedge'], default='standard', help='策略選擇 (standard, maker_hedge, grid, perp_grid 或 long_short_hedge)')
+    parser.add_argument('--strategy', choices=['standard', 'maker_hedge', 'grid', 'perp_grid', 'long_short_hedge', 'spot_buy_grid'], default='standard', help='策略選擇 (standard, maker_hedge, grid, perp_grid, long_short_hedge 或 spot_buy_grid)')
 
     # 網格策略參數
     parser.add_argument('--grid-upper', type=float, help='網格上限價格')
@@ -60,7 +60,11 @@ def parse_arguments():
     parser.add_argument('--grid-tp', type=float, default=1.17, help='Take profit offset in USD')
     parser.add_argument('--volatility', type=float, default=0.0, help='User-input volatility for adaptive spacing')
     parser.add_argument('--funding-pause', type=float, default=0.0, help='Pause threshold for funding rate')
-    parser.add_argument('--liq-buffer', type=float, default=0.05, help='Liquidation proximity buffer (0.05 = 5%)')
+    parser.add_argument('--liq-buffer', type=float, default=0.05, help='Liquidation proximity buffer (0.05 = 5 percent)')
+
+    # Spot Buy Grid 策略參數
+    parser.add_argument('--trigger-offset', type=float, default=0.001, help='Upper band trigger offset (default: 0.001)')
+    parser.add_argument('--tp-offset', type=float, default=0.02, help='Take profit offset (default: 0.02)')
 
     # 數據庫選項
     parser.add_argument('--enable-db', dest='enable_db', action='store_true', help='啟用資料庫寫入功能')
@@ -339,6 +343,35 @@ def main():
                     volatility=args.volatility,
                     funding_pause_threshold=args.funding_pause,
                     liquidation_buffer=args.liq_buffer,
+                    exchange='zoomex',
+                    exchange_config=exchange_config,
+                    enable_database=args.enable_db,
+                )
+
+            elif strategy_name == 'spot_buy_grid':
+                # Spot Buy Grid - Zoomex spot only
+                if exchange != 'zoomex':
+                    logger.error("spot_buy_grid 策略只支援 Zoomex 交易所")
+                    sys.exit(1)
+
+                from strategies.spot_buy_grid import SpotBuyGrid
+
+                logger.info("啟動 Spot Buy Grid 策略")
+                logger.info(f"  Grid Spacing: ${args.grid_spacing}")
+                logger.info(f"  Maximum Orders per Band: {args.max_orders}")
+                logger.info(f"  Order Quantity: {args.quantity}")
+                logger.info(f"  Trigger Offset: {args.trigger_offset}")
+                logger.info(f"  Take Profit Offset: ${args.tp_offset}")
+
+                market_maker = SpotBuyGrid(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    symbol=args.symbol,
+                    grid_spacing=args.grid_spacing,
+                    maximum_order=args.max_orders,
+                    order_quantity=args.quantity,
+                    trigger_offset=args.trigger_offset,
+                    take_profit_offset=args.tp_offset,
                     exchange='zoomex',
                     exchange_config=exchange_config,
                     enable_database=args.enable_db,

@@ -137,6 +137,8 @@ function setupEventListeners() {
         toggleGridTypeField();
         toggleSpreadField();
         toggleLeverageField();
+        // Update spot_buy_grid visibility based on Zoomex + Spot
+        updateSpotBuyGridVisibility();
     });
 
     // 策略切換
@@ -172,6 +174,7 @@ function setupEventListeners() {
 // 切換間隔設定欄位（有WebSocket的交易所隱藏）
 function toggleIntervalField() {
     const exchange = exchangeSelect.value;
+    const strategy = strategySelect.value;
     const intervalField = document.getElementById('intervalField');
     const intervalInput = document.getElementById('interval');
     const zoomexParams = document.getElementById('zoomexParams');
@@ -185,8 +188,8 @@ function toggleIntervalField() {
         intervalInput.value = '10';  // 其他交易所使用較長間隔
     }
 
-    // 只有Zoomex顯示WebSocket特殊設定
-    if (exchange === 'zoomex') {
+    // 只有Zoomex顯示WebSocket特殊設定（但spot_buy_grid不需要）
+    if (exchange === 'zoomex' && strategy !== 'spot_buy_grid' && strategy !== 'long_short_hedge') {
         zoomexParams.style.display = 'block';
     } else {
         zoomexParams.style.display = 'none';
@@ -211,6 +214,11 @@ function toggleMarketTypeParams() {
         return;
     }
 
+    // spot_buy_grid 和 long_short_hedge 有自己的參數面板，不需要顯示通用參數
+    if (strategy === 'spot_buy_grid' || strategy === 'long_short_hedge') {
+        return;
+    }
+
     if (marketType === 'spot') {
         spotParams.style.display = 'block';
     } else {
@@ -230,6 +238,12 @@ function toggleStrategyParams() {
         longShortHedgeParams.style.display = strategy === 'long_short_hedge' ? 'block' : 'none';
     }
 
+    // Spot Buy Grid 參數
+    const spotBuyGridParams = document.getElementById('spotBuyGridParams');
+    if (spotBuyGridParams) {
+        spotBuyGridParams.style.display = strategy === 'spot_buy_grid' ? 'block' : 'none';
+    }
+
     // 顯示正確的市場參數區塊
     toggleMarketTypeParams();
 
@@ -245,6 +259,15 @@ function toggleStrategyParams() {
     if (strategy === 'long_short_hedge') {
         exchangeSelect.value = 'zoomex';
         marketTypeSelect.value = 'perp';
+        adjustMarketTypeOptions();
+        toggleLeverageField();
+        toggleIntervalField();
+    }
+
+    // Spot Buy Grid 策略強制 Zoomex 和 spot 市場
+    if (strategy === 'spot_buy_grid') {
+        exchangeSelect.value = 'zoomex';
+        marketTypeSelect.value = 'spot';
         adjustMarketTypeOptions();
         toggleLeverageField();
         toggleIntervalField();
@@ -282,10 +305,14 @@ function toggleGridTypeField() {
 function adjustMarketTypeOptions() {
     const exchange = exchangeSelect.value;
     const currentMarketType = marketTypeSelect.value;
+    const strategy = strategySelect.value;
 
     // 獲取市場類型的所有選項
     const spotOption = marketTypeSelect.querySelector('option[value="spot"]');
     const perpOption = marketTypeSelect.querySelector('option[value="perp"]');
+
+    // 獲取 spot_buy_grid 選項
+    const spotBuyGridOption = strategySelect.querySelector('option[value="spot_buy_grid"]');
 
     if (exchange === 'backpack') {
         // Backpack 支持現貨和永續合約
@@ -297,6 +324,27 @@ function adjustMarketTypeOptions() {
             perpOption.disabled = false;
             perpOption.style.display = 'block';
         }
+        // Hide spot_buy_grid for non-Zoomex
+        if (spotBuyGridOption) {
+            spotBuyGridOption.disabled = true;
+            spotBuyGridOption.style.display = 'none';
+            if (strategy === 'spot_buy_grid') {
+                strategySelect.value = 'standard';
+                toggleStrategyParams();
+            }
+        }
+    } else if (exchange === 'zoomex') {
+        // Zoomex 支持現貨和永續合約
+        if (spotOption) {
+            spotOption.disabled = false;
+            spotOption.style.display = 'block';
+        }
+        if (perpOption) {
+            perpOption.disabled = false;
+            perpOption.style.display = 'block';
+        }
+        // Show/hide spot_buy_grid based on market type
+        updateSpotBuyGridVisibility();
     } else {
         // 其他交易所（Aster、Paradex、Lighter）只支持永續合約
         if (spotOption) {
@@ -316,6 +364,41 @@ function adjustMarketTypeOptions() {
             toggleGridTypeField();
             toggleSpreadField();
         }
+
+        // Hide spot_buy_grid for non-Zoomex
+        if (spotBuyGridOption) {
+            spotBuyGridOption.disabled = true;
+            spotBuyGridOption.style.display = 'none';
+            if (strategy === 'spot_buy_grid') {
+                strategySelect.value = 'standard';
+                toggleStrategyParams();
+            }
+        }
+    }
+}
+
+// Update spot_buy_grid option visibility based on Zoomex + Spot
+function updateSpotBuyGridVisibility() {
+    const exchange = exchangeSelect.value;
+    const marketType = marketTypeSelect.value;
+    const strategy = strategySelect.value;
+    const spotBuyGridOption = strategySelect.querySelector('option[value="spot_buy_grid"]');
+
+    if (spotBuyGridOption) {
+        if (exchange === 'zoomex' && marketType === 'spot') {
+            // Show spot_buy_grid for Zoomex + Spot
+            spotBuyGridOption.disabled = false;
+            spotBuyGridOption.style.display = 'block';
+        } else {
+            // Hide spot_buy_grid for other combinations
+            spotBuyGridOption.disabled = true;
+            spotBuyGridOption.style.display = 'none';
+            // If currently selected, switch to standard
+            if (strategy === 'spot_buy_grid') {
+                strategySelect.value = 'standard';
+                toggleStrategyParams();
+            }
+        }
     }
 }
 
@@ -331,6 +414,16 @@ function toggleSpreadField() {
     }
     // 永續合約對沖不需要設置價差
     else if (strategy === 'maker_hedge' && marketType === 'perp') {
+        spreadField.style.display = 'none';
+        document.getElementById('spread').required = false;
+    }
+    // Long Short Hedge 不需要設置價差
+    else if (strategy === 'long_short_hedge') {
+        spreadField.style.display = 'none';
+        document.getElementById('spread').required = false;
+    }
+    // Spot Buy Grid 不需要設置價差
+    else if (strategy === 'spot_buy_grid') {
         spreadField.style.display = 'none';
         document.getElementById('spread').required = false;
     }
@@ -592,6 +685,24 @@ async function startBot() {
         // 強制 Zoomex 和 perp
         data.exchange = 'zoomex';
         data.market_type = 'perp';
+
+        // 設默認值
+        if (!data.spread) {
+            data.spread = 0.01;
+        }
+    }
+
+    // Spot Buy Grid 策略參數
+    if (data.strategy === 'spot_buy_grid') {
+        data.grid_spacing = parseFloat(document.getElementById('grid_spacing_spot')?.value) || 0.01;
+        data.maximum_order = parseInt(document.getElementById('max_orders_spot_grid')?.value) || 5;
+        data.order_quantity = data.quantity;  // Use quantity from basic settings
+        data.trigger_offset = parseFloat(document.getElementById('trigger_offset')?.value) || 0.001;
+        data.tp_offset = parseFloat(document.getElementById('tp_offset')?.value) || 0.02;
+
+        // 強制 Zoomex 和 spot
+        data.exchange = 'zoomex';
+        data.market_type = 'spot';
 
         // 設默認值
         if (!data.spread) {
