@@ -624,12 +624,6 @@ class ZoomexClient(BaseExchangeClient):
         if order_details.get("reduceOnly"):
             data["reduceOnly"] = order_details["reduceOnly"]
         
-        # Conditional order fields (for stop-limit / breakout orders)
-        if order_details.get("triggerPrice"):
-            data["triggerPrice"] = str(order_details["triggerPrice"])
-        if order_details.get("triggerDirection"):
-            data["triggerDirection"] = order_details["triggerDirection"]
-        
         response = self.make_request("POST", endpoint, data=data)
         
         if "error" in response:

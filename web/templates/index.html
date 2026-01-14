@@ -235,7 +235,7 @@
                                         <option value="standard">標準做市</option>
                                         <option value="maker_hedge">對沖做市</option>
                                         <option value="grid">網格交易</option>
-                                        <option value="spot_long_grid">Spot Long Grid</option>
+                                        <option value="long_short_hedge">Long Grid Short Hedge</option>
                                     </select>
                                 </div>
 
@@ -251,7 +251,7 @@
                                         placeholder="0.5">
                                 </div>
 
-                                <div class="form-field" id="quantityField">
+                                <div class="form-field">
                                     <label class="field-label">數量</label>
                                     <input type="number" id="quantity" name="quantity" class="field-input"
                                         step="0.00001" placeholder="自動">
@@ -426,43 +426,50 @@
                                 </div>
                             </div>
 
-                            <!-- Spot Long Grid Strategy Parameters -->
-                            <div id="spotLongGridParams" class="config-block flex-1" style="display: none;">
-                                <h3 class="block-title">Spot Long Grid 參數</h3>
+                            <!-- Long Short Hedge Strategy Parameters -->
+                            <div id="longShortHedgeParams" class="config-block flex-1" style="display: none;">
+                                <h3 class="block-title">Long Grid Short Hedge 參數</h3>
                                 <div class="form-grid-compact">
                                     <div class="form-field">
-                                        <label class="field-label">Grid Size</label>
-                                        <input type="number" id="spot_grid_size" name="grid_size" class="field-input"
-                                            value="0.02" step="0.001" min="0.001">
-                                        <small class="field-hint">每個網格買入數量</small>
+                                        <label class="field-label">Anchor Short Size (ETH)</label>
+                                        <input type="number" id="short_size" name="short_size" class="field-input"
+                                            value="2.0" step="0.01" min="0.01">
+                                        <small class="field-hint">基礎對沖空單大小</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Grid Long Size (ETH)</label>
+                                        <input type="number" id="grid_long_size" name="grid_long_size"
+                                            class="field-input" value="0.02" step="0.001" min="0.001">
+                                        <small class="field-hint">每個網格多單大小</small>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label">Grid Leverage</label>
+                                        <input type="number" id="grid_leverage" name="grid_leverage" class="field-input"
+                                            value="20" min="1" max="100" step="1">
+                                        <small class="field-hint">網格多單槓桿倍數</small>
                                     </div>
 
                                     <div class="form-field">
                                         <label class="field-label">Grid Spacing (USD)</label>
-                                        <input type="number" id="spot_grid_spacing" name="grid_spacing"
-                                            class="field-input" value="1.0" step="0.1" min="0.01">
+                                        <input type="number" id="grid_spacing_hedge" name="grid_spacing"
+                                            class="field-input" value="0.10" step="0.01" min="0.01">
                                         <small class="field-hint">網格間距 (美元)</small>
                                     </div>
 
                                     <div class="form-field">
+                                        <label class="field-label">Grid Levels</label>
+                                        <input type="number" id="grid_levels" name="grid_levels" class="field-input"
+                                            value="10" min="1" max="100" step="1">
+                                        <small class="field-hint">每側網格層數</small>
+                                    </div>
+
+                                    <div class="form-field">
                                         <label class="field-label">Take Profit (USD)</label>
-                                        <input type="number" id="spot_take_profit" name="take_profit"
-                                            class="field-input" value="1.5" step="0.00001" min="0.00001">
+                                        <input type="number" id="grid_tp" name="grid_tp" class="field-input"
+                                            value="1.17" step="0.01" min="0.01">
                                         <small class="field-hint">止盈距離 (美元)</small>
-                                    </div>
-
-                                    <div class="form-field">
-                                        <label class="field-label">Trigger Offset (USD)</label>
-                                        <input type="number" id="spot_trigger_offset" name="trigger_offset"
-                                            class="field-input" value="0.5" step="0.00001" min="0.00001">
-                                        <small class="field-hint">上方網格觸發偏移</small>
-                                    </div>
-
-                                    <div class="form-field">
-                                        <label class="field-label">Max Orders</label>
-                                        <input type="number" id="spot_max_orders" name="max_orders" class="field-input"
-                                            value="5" min="1" max="50" step="1">
-                                        <small class="field-hint">最大掛單數量 (保留最近價格的訂單)</small>
                                     </div>
                                 </div>
                             </div>
