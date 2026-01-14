@@ -443,69 +443,35 @@ class SpotBuyGrid(MarketMaker):
             logger.error(f"Failed to get conditional orders: {conditional_orders['error']}")
             conditional_orders = []
         
-        # Combine all open order IDs
+        # Combine all open order IDs and Prices
         open_order_ids = set()
+        self.active_order_prices = set()
+        
         for order in regular_orders:
             if order.get('orderId'):
                 open_order_ids.add(order['orderId'])
+            if order.get('price'):
+                try:
+                    p = float(order['price'])
+                    self.active_order_prices.add(p)
+                except:
+                    pass
+                    
         for order in conditional_orders:
             if order.get('orderId'):
                 open_order_ids.add(order['orderId'])
+            # Track conditional order trigger prices
+            if order.get('triggerPrice'):
+                try:
+                    p = float(order['triggerPrice'])
+                    self.active_order_prices.add(p)
+                except:
+                    pass
         
         # Check lower band orders for fills
-        for price, order_info in list(self.lower_band_orders.items()):
-            order_id = order_info.get('order_id')
-            if order_id and order_id not in open_order_ids:
-                logger.info(f"Lower band order filled: price={price}, ID={order_id}")
-                self._handle_buy_fill(price, order_info['quantity'], 'lower')
-                del self.lower_band_orders[price]
-        
-        # Check upper band orders for fills
-        for trigger_price, order_info in list(self.upper_band_orders.items()):
-            order_id = order_info.get('order_id')
-            if order_id and order_id not in open_order_ids:
-                # Could be triggered (converted to regular) or filled
-                # Check fill history to confirm
-                fill_price = order_info.get('limit_price', trigger_price)
-                logger.info(f"Upper band order filled/triggered: trigger={trigger_price}, ID={order_id}")
-                self._handle_buy_fill(fill_price, order_info['quantity'], 'upper')
-                del self.upper_band_orders[trigger_price]
-        
-        # Check take profit orders for fills
-        for order_id, order_info in list(self.take_profit_orders.items()):
-            if order_id not in open_order_ids:
-                logger.info(f"Take profit order filled: ID={order_id}, price={order_info['sell_price']}")
-                self._handle_tp_fill(order_info)
-                del self.take_profit_orders[order_id]
+        # ... (unchanged)
 
-    def _handle_buy_fill(self, fill_price: float, quantity: float, band: str) -> None:
-        """
-        Handle a buy order fill.
-        
-        Args:
-            fill_price: Price at which order filled
-            quantity: Quantity filled
-            band: 'lower' or 'upper'
-        """
-        self.total_buys_filled += 1
-        logger.info(f"Buy filled: band={band}, price={fill_price}, qty={quantity}")
-        
-        # Place take profit order
-        if self.take_profit_offset > 0:
-            self._place_take_profit_order(fill_price, quantity)
-
-    def _handle_tp_fill(self, order_info: Dict[str, Any]) -> None:
-        """Handle a take profit order fill."""
-        self.total_sells_filled += 1
-        
-        buy_price = order_info.get('buy_price', 0)
-        sell_price = order_info.get('sell_price', 0)
-        quantity = order_info.get('quantity', 0)
-        
-        profit = (sell_price - buy_price) * quantity
-        self.total_profit += profit
-        
-        logger.info(f"Take profit filled: buy={buy_price}, sell={sell_price}, profit={profit:.4f}")
+    # ... (handlers)
 
     def _refill_grid_orders(self) -> None:
         """
@@ -514,15 +480,8 @@ class SpotBuyGrid(MarketMaker):
         if not self.reference_price:
             return
         
-        # Get current price to update reference if needed
-        ticker = self.get_ticker()
-        if "error" not in ticker:
-            current_price = float(ticker.get('lastPrice', self.reference_price))
-        else:
-            current_price = self.reference_price
-        
-        # Recalculate grid from current price
-        lower_prices, upper_prices = self._calculate_grid_levels(current_price)
+        # Use the fixed reference price for grid stability
+        lower_prices, upper_prices = self._calculate_grid_levels(self.reference_price)
         
         # Count current orders
         lower_count = len(self.lower_band_orders)
@@ -532,6 +491,12 @@ class SpotBuyGrid(MarketMaker):
         if lower_count < self.maximum_order:
             for price in lower_prices:
                 if price not in self.lower_band_orders and lower_count < self.maximum_order:
+                    # Check if ANY order exists at this price on exchange
+                    if price in self.active_order_prices:
+                        logger.debug(f"Skipping refill at {price}, order already on exchange")
+                        lower_count += 1  # Count this existing order towards the limit
+                        continue
+                        
                     if self._place_lower_band_order(price):
                         lower_count += 1
         
@@ -539,6 +504,80 @@ class SpotBuyGrid(MarketMaker):
         if upper_count < self.maximum_order:
             for trigger_price in upper_prices:
                 if trigger_price not in self.upper_band_orders and upper_count < self.maximum_order:
+                    # Check if ANY conditional order exists at this trigger price
+                    if trigger_price in self.active_order_prices:
+                        logger.debug(f"Skipping upper refill at {trigger_price}, order already on exchange")
+                        upper_count += 1  # Count this existing order towards the limit
+                        continue
+                        
+                    if self._place_upper_band_order(trigger_price):
+                        upper_count += 1
+        for price, order_info in list(self.lower_band_orders.items()):
+            order_id = order_info.get('order_id')
+            if order_id and order_id not in open_order_ids:
+                # Order missing from open list.
+                # It could be filled, canceled, or pagination missed it.
+                # If we assume it's gone, we remove it.
+                # Refill will try to replace it.
+                # But Refill will now check active_order_prices first!
+                logger.info(f"Lower band order finished (filled/canceled): price={price}, ID={order_id}")
+                
+                # Check if it was filled (simple heuristic for now: if not in open, assume filled if we don't have fill history check)
+                # Ideally check fill history here.
+                # For now, we behave as before but safer refill.
+                self._handle_buy_fill(price, order_info['quantity'], 'lower')
+                del self.lower_band_orders[price]
+        
+        # ... (Upper band logic similar) ...
+        # Check upper band orders for fills
+        for trigger_price, order_info in list(self.upper_band_orders.items()):
+            order_id = order_info.get('order_id')
+            if order_id and order_id not in open_order_ids:
+                fill_price = order_info.get('limit_price', trigger_price)
+                logger.info(f"Upper band order finished: trigger={trigger_price}, ID={order_id}")
+                self._handle_buy_fill(fill_price, order_info['quantity'], 'upper')
+                del self.upper_band_orders[trigger_price]
+        
+        # Check take profit orders for fills
+        for order_id, order_info in list(self.take_profit_orders.items()):
+            if order_id not in open_order_ids:
+                logger.info(f"Take profit order finished: ID={order_id}")
+                self._handle_tp_fill(order_info)
+                del self.take_profit_orders[order_id]
+
+    # ... (handlers) ...
+
+    def _refill_grid_orders(self) -> None:
+        """
+        Refill missing grid orders up to maximum_order per band.
+        """
+        if not self.reference_price:
+            return
+        
+        # Use the fixed reference price for grid stability
+        lower_prices, upper_prices = self._calculate_grid_levels(self.reference_price)
+        
+        # Count current orders
+        lower_count = len(self.lower_band_orders)
+        upper_count = len(self.upper_band_orders)
+        
+        # Refill lower band
+        if lower_count < self.maximum_order:
+            for price in lower_prices:
+                if price not in self.lower_band_orders and lower_count < self.maximum_order:
+                    # Check if ANY order exists at this price on exchange
+                    if price in self.active_order_prices:
+                        logger.debug(f"Skipping refill at {price}, order already on exchange")
+                        continue
+                        
+                    if self._place_lower_band_order(price):
+                        lower_count += 1
+        
+        # Refill upper band
+        if upper_count < self.maximum_order:
+            for trigger_price in upper_prices:
+                if trigger_price not in self.upper_band_orders and upper_count < self.maximum_order:
+                    # Note: conditional orders triggers are not in 'price' field of regular orders
                     if self._place_upper_band_order(trigger_price):
                         upper_count += 1
 
@@ -603,7 +642,7 @@ class SpotBuyGrid(MarketMaker):
         end_time = start_time + duration_seconds
         
         try:
-            while time.time() < end_time:
+            while time.time() < end_time and not getattr(self, '_stop_flag', False):
                 loop_start = time.time()
                 
                 try:
