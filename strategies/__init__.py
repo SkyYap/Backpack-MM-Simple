@@ -3,16 +3,19 @@
 
 from .market_maker import MarketMaker
 from .perp_market_maker import PerpetualMarketMaker
+from .adaptive_perp_market_maker import AdaptivePerpMarketMaker
 from .maker_taker_hedge import MakerTakerHedgeStrategy
 from .grid_strategy import GridStrategy
 from .perp_grid_strategy import PerpGridStrategy
-from .long_grid_short_hedge import LongGridShortHedge
+from .spot_long_grid import SpotLongGrid
 
 __all__ = [
     "MarketMaker",
     "PerpetualMarketMaker",
+    "AdaptivePerpMarketMaker",
     "MakerTakerHedgeStrategy",
     "GridStrategy",
     "PerpGridStrategy",
-    "LongGridShortHedge",
+    "SpotLongGrid",
 ]
+

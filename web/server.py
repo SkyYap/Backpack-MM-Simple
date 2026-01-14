@@ -205,13 +205,19 @@ def start_bot():
 
         # 獲取策略參數
         symbol = data['symbol']
-        spread = float(data['spread'])
+        strategy_name = data.get('strategy', 'standard')
+        
+        if strategy_name == 'spot_long_grid':
+            spread = 0.0  # Spot Long Grid 不使用此參數
+        else:
+            if 'spread' not in data or data['spread'] is None:
+                return jsonify({'success': False, 'message': '缺少必要參數: spread'}), 400
+            spread = float(data['spread'])
         quantity = float(data.get('quantity', 0)) if data.get('quantity') else None
         max_orders = int(data.get('max_orders', 3))
         duration = int(data.get('duration', 3600))
         interval = float(data.get('interval', 60))
         market_type = data.get('market_type', 'spot')
-        strategy_name = data.get('strategy', 'standard')
         enable_db = data.get('enable_db', False)
 
         # 永續合約參數
@@ -290,38 +296,36 @@ def start_bot():
                     enable_database=enable_db,
                     market_type='perp'
                 )
-            elif strategy_name == 'long_short_hedge':
-                # Long Grid Short Hedge 策略 (僅 Zoomex)
+            elif strategy_name == 'spot_long_grid':
+                # Spot Long Grid 策略 (僅 Zoomex Spot)
                 if exchange != 'zoomex':
-                    return jsonify({'success': False, 'message': 'Long Short Hedge 策略只支援 Zoomex'}), 400
+                    return jsonify({'success': False, 'message': 'Spot Long Grid 策略只支援 Zoomex'}), 400
                 
-                from strategies.long_grid_short_hedge import LongGridShortHedge
+                from strategies.spot_long_grid import SpotLongGrid
                 
                 # 獲取策略特定參數
-                short_size = float(data.get('short_size', 2.0))
-                grid_long_size = float(data.get('grid_long_size', 0.02))
-                grid_leverage = float(data.get('grid_leverage', 20.0))
-                grid_spacing = float(data.get('grid_spacing', 0.10))
-                grid_levels = int(data.get('grid_levels', 10))
-                grid_tp = float(data.get('grid_tp', 1.17))
+                grid_size = float(data.get('grid_size', 0.02))
+                grid_spacing = float(data.get('grid_spacing', 1.0))
+                max_orders_per_side = int(data.get('max_orders_per_side', 5))
+                take_profit = float(data.get('take_profit', 1.5))
+                trigger_offset = float(data.get('trigger_offset', 0.5))
                 
-                logger.info(f"啟動 Long Grid Short Hedge 策略")
-                logger.info(f"  Anchor Short: {short_size} ETH")
-                logger.info(f"  Grid Long Size: {grid_long_size} ETH @ {grid_leverage}× leverage")
-                logger.info(f"  Grid Levels: {grid_levels} each side")
+                logger.info(f"啟動 Spot Long Grid 策略")
+                logger.info(f"  Grid Size: {grid_size}")
                 logger.info(f"  Grid Spacing: ${grid_spacing}")
-                logger.info(f"  Take Profit Offset: ${grid_tp}")
+                logger.info(f"  Max Orders Per Side: {max_orders_per_side}")
+                logger.info(f"  Take Profit: ${take_profit}")
+                logger.info(f"  Trigger Offset: ${trigger_offset}")
                 
-                current_strategy = LongGridShortHedge(
+                current_strategy = SpotLongGrid(
                     api_key=api_key,
                     secret_key=secret_key,
                     symbol=symbol,
-                    short_size=short_size,
-                    grid_long_size=grid_long_size,
-                    grid_leverage=grid_leverage,
+                    grid_size=grid_size,
                     grid_spacing=grid_spacing,
-                    grid_levels=grid_levels,
-                    take_profit=grid_tp,
+                    max_orders_per_side=max_orders_per_side,
+                    take_profit=take_profit,
+                    trigger_offset=trigger_offset,
                     exchange='zoomex',
                     exchange_config=exchange_config,
                     enable_database=enable_db,

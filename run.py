@@ -40,7 +40,15 @@ def parse_arguments():
     parser.add_argument('--inventory-skew', type=float, default=0.0, help='永續倉位偏移調整係數 (0-1)')
     parser.add_argument('--stop-loss', type=float, help='永續倉位止損觸發值 (以報價資產計價)')
     parser.add_argument('--take-profit', type=float, help='永續倉位止盈觸發值 (以報價資產計價)')
-    parser.add_argument('--strategy', choices=['standard', 'maker_hedge', 'grid', 'perp_grid', 'long_short_hedge'], default='standard', help='策略選擇 (standard, maker_hedge, grid, perp_grid 或 long_short_hedge)')
+    parser.add_argument('--strategy', choices=['standard', 'maker_hedge', 'grid', 'perp_grid', 'long_short_hedge', 'adaptive'], default='standard', help='策略選擇 (standard, maker_hedge, grid, perp_grid, long_short_hedge 或 adaptive)')
+
+    # Adaptive策略專用參數
+    parser.add_argument('--natr-baseline', type=float, default=0.15, help='NATR基準值 (默認: 0.15%%)')
+    parser.add_argument('--spread-sensitivity', type=float, default=0.5, help='價差敏感度 (0-1, 默認: 0.5)')
+    parser.add_argument('--max-inventory', type=float, default=25.0, help='最大目標庫存 (默認: 25)')
+    parser.add_argument('--skew-threshold', type=float, default=0.5, help='庫存偏移觸發閾值 (默認: 0.5)')
+    parser.add_argument('--enable-killswitch', action='store_true', default=True, help='啟用熔斷機制 (默認: 開啟)')
+    parser.add_argument('--disable-killswitch', action='store_true', help='停用熔斷機制')
 
     # 網格策略參數
     parser.add_argument('--grid-upper', type=float, help='網格上限價格')
@@ -237,6 +245,7 @@ def main():
             from strategies.market_maker import MarketMaker
             from strategies.maker_taker_hedge import MakerTakerHedgeStrategy
             from strategies.perp_market_maker import PerpetualMarketMaker
+            from strategies.adaptive_perp_market_maker import AdaptivePerpMarketMaker
             from strategies.grid_strategy import GridStrategy
             from strategies.perp_grid_strategy import PerpGridStrategy
             
@@ -343,6 +352,40 @@ def main():
                     exchange_config=exchange_config,
                     enable_database=args.enable_db,
                 )
+
+            elif strategy_name == 'adaptive':
+                # Adaptive Market Maker - Zoomex preferred
+                logger.info("啟動自適應做市策略 (Adaptive Market Maker)")
+                logger.info(f"  基礎價差: {args.spread}%")
+                logger.info(f"  NATR基準: {args.natr_baseline}%")
+                logger.info(f"  價差敏感度: {args.spread_sensitivity}")
+                logger.info(f"  最大庫存: {args.max_inventory}")
+                logger.info(f"  庫存偏移閾值: {args.skew_threshold}")
+                logger.info(f"  熔斷機制: {'開啟' if not args.disable_killswitch else '關閉'}")
+
+                market_maker = AdaptivePerpMarketMaker(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    symbol=args.symbol,
+                    baseline_spread_pct=args.spread or 0.02,
+                    natr_baseline=args.natr_baseline,
+                    spread_sensitivity=args.spread_sensitivity,
+                    max_inventory_target=args.max_inventory,
+                    inventory_skew_threshold=args.skew_threshold,
+                    target_position=args.target_position,
+                    max_position=args.max_position,
+                    stop_loss=args.stop_loss,
+                    take_profit=args.take_profit,
+                    enable_kill_switches=not args.disable_killswitch,
+                    exchange=exchange,
+                    exchange_config=exchange_config,
+                    enable_database=args.enable_db,
+                )
+
+                if args.stop_loss is not None:
+                    logger.info(f"  止損閾值: {args.stop_loss} {market_maker.quote_asset}")
+                if args.take_profit is not None:
+                    logger.info(f"  止盈閾值: {args.take_profit} {market_maker.quote_asset}")
 
             elif market_type == 'perp':
                 logger.info(f"啟動永續合約做市模式 (策略: {strategy_name}, 交易所: {exchange})")
@@ -501,6 +544,13 @@ def main():
         print("  python run.py --exchange lighter --symbol BTCUSDT --strategy perp_grid --grid-lower 45000 --grid-upper 50000 --grid-num 10 --grid-type short")
         print("  # 永續網格（帶止損止盈）")
         print("  python run.py --exchange aster --symbol ETHUSDT --strategy perp_grid --auto-price --grid-num 15 --stop-loss 100 --take-profit 200")
+        print("\n=== 範例：自適應做市策略 ===")
+        print("  # Zoomex 自適應做市（推薦）")
+        print("  python run.py --exchange zoomex --symbol ETHUSDT --strategy adaptive --spread 0.02")
+        print("  # 自訂NATR基準和庫存限制")
+        print("  python run.py --exchange zoomex --symbol ETHUSDT --strategy adaptive --spread 0.02 --natr-baseline 0.20 --max-inventory 10")
+        print("  # 關閉熔斷機制")
+        print("  python run.py --exchange zoomex --symbol ETHUSDT --strategy adaptive --spread 0.02 --disable-killswitch")
         print("\n使用 --help 查看完整幫助")
 
 if __name__ == "__main__":

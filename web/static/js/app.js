@@ -185,8 +185,9 @@ function toggleIntervalField() {
         intervalInput.value = '10';  // 其他交易所使用較長間隔
     }
 
-    // 只有Zoomex顯示WebSocket特殊設定
-    if (exchange === 'zoomex') {
+    // 只有Zoomex顯示WebSocket特殊設定（但spot_long_grid策略不需要）
+    const strategy = strategySelect.value;
+    if (exchange === 'zoomex' && strategy !== 'spot_long_grid') {
         zoomexParams.style.display = 'block';
     } else {
         zoomexParams.style.display = 'none';
@@ -224,10 +225,10 @@ function toggleStrategyParams() {
     const strategy = strategySelect.value;
     gridParams.style.display = strategy === 'grid' ? 'block' : 'none';
 
-    // Long Short Hedge 參數
-    const longShortHedgeParams = document.getElementById('longShortHedgeParams');
-    if (longShortHedgeParams) {
-        longShortHedgeParams.style.display = strategy === 'long_short_hedge' ? 'block' : 'none';
+    // Spot Long Grid 參數
+    const spotLongGridParams = document.getElementById('spotLongGridParams');
+    if (spotLongGridParams) {
+        spotLongGridParams.style.display = strategy === 'spot_long_grid' ? 'block' : 'none';
     }
 
     // 顯示正確的市場參數區塊
@@ -241,13 +242,40 @@ function toggleStrategyParams() {
         togglePerpFields();
     }
 
-    // Long Short Hedge 策略強制 Zoomex 和 perp 市場
-    if (strategy === 'long_short_hedge') {
+    // Spot Long Grid 策略強制 Zoomex 和 spot 市場
+    if (strategy === 'spot_long_grid') {
         exchangeSelect.value = 'zoomex';
-        marketTypeSelect.value = 'perp';
+        marketTypeSelect.value = 'spot';
         adjustMarketTypeOptions();
-        toggleLeverageField();
         toggleIntervalField();
+
+        // 隱藏不需要的欄位並禁用驗證
+        const spreadField = document.getElementById('spreadField');
+        const quantityField = document.getElementById('quantityField');
+        const spreadInput = document.getElementById('spread');
+        const quantityInput = document.getElementById('quantity');
+
+        if (spreadField) spreadField.style.display = 'none';
+        if (quantityField) quantityField.style.display = 'none';
+        if (spreadInput) {
+            spreadInput.removeAttribute('required');
+            spreadInput.disabled = true;
+        }
+        if (quantityInput) {
+            quantityInput.removeAttribute('required');
+            quantityInput.disabled = true;
+        }
+    } else {
+        // 其他策略顯示這些欄位
+        const spreadField = document.getElementById('spreadField');
+        const quantityField = document.getElementById('quantityField');
+        const spreadInput = document.getElementById('spread');
+        const quantityInput = document.getElementById('quantity');
+
+        if (spreadField) spreadField.style.display = 'block';
+        if (quantityField) quantityField.style.display = 'block';
+        if (spreadInput) spreadInput.disabled = false;
+        if (quantityInput) quantityInput.disabled = false;
     }
 }
 
@@ -334,10 +362,17 @@ function toggleSpreadField() {
         spreadField.style.display = 'none';
         document.getElementById('spread').required = false;
     }
+    // Spot Long Grid 不需要設置價差
+    else if (strategy === 'spot_long_grid') {
+        spreadField.style.display = 'none';
+        document.getElementById('spread').required = false;
+        document.getElementById('spread').disabled = true;
+    }
     // 其他情況需要設置價差
     else {
         spreadField.style.display = 'block';
         document.getElementById('spread').required = true;
+        document.getElementById('spread').disabled = false;
     }
 }
 
@@ -580,23 +615,17 @@ async function startBot() {
         }
     }
 
-    // Long Short Hedge 策略參數
-    if (data.strategy === 'long_short_hedge') {
-        data.short_size = parseFloat(formData.get('short_size')) || 2.0;
-        data.grid_long_size = parseFloat(formData.get('grid_long_size')) || 0.02;
-        data.grid_leverage = parseFloat(formData.get('grid_leverage')) || 20.0;
-        data.grid_spacing = parseFloat(document.getElementById('grid_spacing_hedge')?.value) || 0.10;
-        data.grid_levels = parseInt(formData.get('grid_levels')) || 10;
-        data.grid_tp = parseFloat(formData.get('grid_tp')) || 1.17;
+    // Spot Long Grid 策略參數
+    if (data.strategy === 'spot_long_grid') {
+        data.grid_size = parseFloat(document.getElementById('spot_grid_size')?.value) || 0.02;
+        data.grid_spacing = parseFloat(document.getElementById('spot_grid_spacing')?.value) || 1.0;
+        data.max_orders_per_side = parseInt(document.getElementById('spot_max_orders')?.value) || 5;
+        data.take_profit = parseFloat(document.getElementById('spot_take_profit')?.value) || 1.5;
+        data.trigger_offset = parseFloat(document.getElementById('spot_trigger_offset')?.value) || 0.5;
 
-        // 強制 Zoomex 和 perp
+        // 強制 Zoomex 和 spot
         data.exchange = 'zoomex';
-        data.market_type = 'perp';
-
-        // 設默認值
-        if (!data.spread) {
-            data.spread = 0.01;
-        }
+        data.market_type = 'spot';
     }
 
     // 顯示加載狀態
