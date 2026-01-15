@@ -395,7 +395,8 @@ def start_bot():
                 
                 # Parse spot buy grid parameters
                 grid_spacing = float(data.get('grid_spacing', 0.01))
-                maximum_order = int(data.get('maximum_order', 5))
+                max_orders_upper = int(data.get('max_orders_upper', data.get('maximum_order', 5)))
+                max_orders_lower = int(data.get('max_orders_lower', data.get('maximum_order', 5)))
                 order_quantity = float(data.get('order_quantity') or data.get('quantity') or 0)
                 trigger_offset = float(data.get('trigger_offset', 0.001))
                 tp_offset = float(data.get('tp_offset', 0.02))
@@ -405,7 +406,8 @@ def start_bot():
                 
                 logger.info(f"啟動 Spot Buy Grid 策略 (Zoomex 現貨)")
                 logger.info(f"  Grid Spacing: {grid_spacing}")
-                logger.info(f"  Max Orders per Band: {maximum_order}")
+                logger.info(f"  Max Orders Upper: {max_orders_upper}")
+                logger.info(f"  Max Orders Lower: {max_orders_lower}")
                 logger.info(f"  Order Quantity: {order_quantity}")
                 logger.info(f"  Trigger Offset: {trigger_offset}")
                 logger.info(f"  Take Profit Offset: {tp_offset}")
@@ -415,7 +417,8 @@ def start_bot():
                     secret_key=secret_key,
                     symbol=symbol,
                     grid_spacing=grid_spacing,
-                    maximum_order=maximum_order,
+                    max_orders_upper=max_orders_upper,
+                    max_orders_lower=max_orders_lower,
                     order_quantity=order_quantity,
                     trigger_offset=trigger_offset,
                     take_profit_offset=tp_offset,

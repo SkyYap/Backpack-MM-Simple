@@ -695,7 +695,8 @@ async function startBot() {
     // Spot Buy Grid 策略參數
     if (data.strategy === 'spot_buy_grid') {
         data.grid_spacing = parseFloat(document.getElementById('grid_spacing_spot')?.value) || 0.01;
-        data.maximum_order = parseInt(document.getElementById('max_orders_spot_grid')?.value) || 5;
+        data.max_orders_upper = parseInt(document.getElementById('max_orders_upper_spot_grid')?.value) || 5;
+        data.max_orders_lower = parseInt(document.getElementById('max_orders_lower_spot_grid')?.value) || 5;
         data.order_quantity = data.quantity;  // Use quantity from basic settings
         data.trigger_offset = parseFloat(document.getElementById('trigger_offset')?.value) || 0.001;
         data.tp_offset = parseFloat(document.getElementById('tp_offset')?.value) || 0.02;

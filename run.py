@@ -64,6 +64,8 @@ def parse_arguments():
 
     # Spot Buy Grid 策略參數
     parser.add_argument('--trigger-offset', type=float, default=0.001, help='Upper band trigger offset (default: 0.001)')
+    parser.add_argument('--max-orders-upper', type=int, help='Maximum orders for upper band (default: same as --max-orders)')
+    parser.add_argument('--max-orders-lower', type=int, help='Maximum orders for lower band (default: same as --max-orders)')
     parser.add_argument('--tp-offset', type=float, default=0.02, help='Take profit offset (default: 0.02)')
 
     # 數據庫選項
@@ -235,7 +237,7 @@ def main():
         except ImportError as e:
             logger.error(f"啟動命令行界面時出錯: {str(e)}")
             sys.exit(1)
-    elif args.symbol and (args.spread is not None or args.strategy in ['grid', 'perp_grid']):
+    elif args.symbol and (args.spread is not None or args.strategy in ['grid', 'perp_grid', 'long_short_hedge', 'spot_buy_grid']):
         # 如果指定了交易對，直接運行策略（做市或網格）
         try:
             from strategies.market_maker import MarketMaker
@@ -358,7 +360,13 @@ def main():
 
                 logger.info("啟動 Spot Buy Grid 策略")
                 logger.info(f"  Grid Spacing: ${args.grid_spacing}")
-                logger.info(f"  Maximum Orders per Band: {args.max_orders}")
+                
+                # Determine max orders for each band
+                max_upper = args.max_orders_upper if args.max_orders_upper is not None else args.max_orders
+                max_lower = args.max_orders_lower if args.max_orders_lower is not None else args.max_orders
+                
+                logger.info(f"  Max Orders Upper: {max_upper}")
+                logger.info(f"  Max Orders Lower: {max_lower}")
                 logger.info(f"  Order Quantity: {args.quantity}")
                 logger.info(f"  Trigger Offset: {args.trigger_offset}")
                 logger.info(f"  Take Profit Offset: ${args.tp_offset}")
@@ -368,7 +376,8 @@ def main():
                     secret_key=secret_key,
                     symbol=args.symbol,
                     grid_spacing=args.grid_spacing,
-                    maximum_order=args.max_orders,
+                    max_orders_upper=max_upper,
+                    max_orders_lower=max_lower,
                     order_quantity=args.quantity,
                     trigger_offset=args.trigger_offset,
                     take_profit_offset=args.tp_offset,

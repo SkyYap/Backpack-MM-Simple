@@ -716,7 +716,7 @@ class ZoomexClient(BaseExchangeClient):
             return response
 
         result = response.get("result", {})
-        order_list = result.get("list", [])
+        order_list = result.get("list") or []
         
         # Return list directly for compatibility with strategies
         orders = []
@@ -770,7 +770,7 @@ class ZoomexClient(BaseExchangeClient):
             
         fills = []
         result = response.get("result", {})
-        fill_list = result.get("list", [])
+        fill_list = result.get("list") or []
         
         for fill in fill_list:
             # Normalize to strategy-expected format
@@ -1132,8 +1132,7 @@ class ZoomexClient(BaseExchangeClient):
         endpoint = "/cloud/trade/v3/order/realtime"
         params = {
             "category": "spot",
-            "orderFilter": order_filter,
-            "openOnly": "0"  # Open orders only
+            "orderFilter": order_filter
         }
         
         if symbol:
@@ -1145,7 +1144,7 @@ class ZoomexClient(BaseExchangeClient):
             return response
 
         result = response.get("result", {})
-        order_list = result.get("list", [])
+        order_list = result.get("list") or []
         
         # Return list directly for compatibility with strategies
         orders = []
@@ -1298,7 +1297,7 @@ class ZoomexClient(BaseExchangeClient):
             
         fills = []
         result = response.get("result", {})
-        fill_list = result.get("list", [])
+        fill_list = result.get("list") or []
         
         for fill in fill_list:
             side = fill.get("side", "").upper()
@@ -1322,3 +1321,58 @@ class ZoomexClient(BaseExchangeClient):
         
         return fills
 
+    def get_spot_order_history(self, symbol: Optional[str] = None, order_id: Optional[str] = None, limit: int = 50) -> Any:
+        """Get spot order history.
+        
+        Endpoint: GET /cloud/trade/v3/order/history
+        
+        Args:
+            symbol: Trading pair (optional)
+            order_id: Specific order ID to query
+            limit: Max number of records (default 50)
+            
+        Returns:
+            List of orders.
+        """
+        endpoint = "/cloud/trade/v3/order/history"
+        params = {
+            "category": "spot",
+            "limit": str(limit)
+        }
+        
+        if symbol:
+            params["symbol"] = symbol
+        if order_id:
+            params["orderId"] = order_id
+        
+        response = self.make_request("GET", endpoint, params=params)
+        
+        if "error" in response:
+            return response
+
+        result = response.get("result", {})
+        order_list = result.get("list") or []
+        
+        # Return list directly for compatibility with strategies
+        orders = []
+        for order in order_list:
+            order_id = order.get("orderId")
+            orders.append({
+                "id": order_id,
+                "orderId": order_id,
+                "orderLinkId": order.get("orderLinkId"),
+                "symbol": order.get("symbol"),
+                "side": order.get("side"),
+                "orderType": order.get("orderType"),
+                "price": order.get("price"),
+                "qty": order.get("qty"),
+                "filledQty": order.get("cumExecQty"),
+                "status": order.get("orderStatus"),
+                "timeInForce": order.get("timeInForce"),
+                "triggerPrice": order.get("triggerPrice"),
+                "orderFilter": order.get("orderFilter"),
+                "createdTime": order.get("createdTime"),
+                "raw": order
+            })
+        
+        return orders
