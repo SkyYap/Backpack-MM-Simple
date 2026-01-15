@@ -139,6 +139,10 @@ class SpotBuyGrid(MarketMaker):
         self.total_buys_filled = 0
         self.total_sells_filled = 0
         self.total_profit = 0.0
+        
+        # Track filled price levels to prevent duplicate orders
+        self.filled_lower_prices: Set[float] = set()
+        self.filled_upper_prices: Set[float] = set()
 
         logger.info("=" * 60)
         logger.info("Spot Buy Grid Strategy Initialized")
@@ -429,6 +433,52 @@ class SpotBuyGrid(MarketMaker):
         self.order_id_to_grid_price.clear()
         self.order_id_to_band.clear()
 
+    def _handle_buy_fill(self, fill_price: float, quantity: float, band: str) -> None:
+        """
+        Handle a buy order fill - place take profit and update stats.
+        
+        Args:
+            fill_price: Price at which the buy was filled
+            quantity: Quantity that was filled
+            band: Which band the order was from ('lower' or 'upper')
+        """
+        logger.info(f"Buy filled: price={fill_price}, qty={quantity}, band={band}")
+        
+        # Track this price as filled to prevent duplicate refills
+        if band == 'lower':
+            self.filled_lower_prices.add(fill_price)
+        elif band == 'upper':
+            self.filled_upper_prices.add(fill_price)
+        
+        # Update statistics
+        self.total_buys_filled += 1
+        
+        # Place take profit order if offset is configured
+        if self.take_profit_offset > 0:
+            self._place_take_profit_order(fill_price, quantity)
+        else:
+            logger.info("No take profit offset configured, skipping TP order")
+
+    def _handle_tp_fill(self, order_info: Dict[str, Any]) -> None:
+        """
+        Handle a take profit order fill - record profit and update stats.
+        
+        Args:
+            order_info: Dictionary with buy_price, sell_price, quantity
+        """
+        buy_price = order_info.get('buy_price', 0)
+        sell_price = order_info.get('sell_price', 0)
+        quantity = order_info.get('quantity', 0)
+        
+        # Calculate profit
+        profit = (sell_price - buy_price) * quantity
+        
+        # Update statistics
+        self.total_sells_filled += 1
+        self.total_profit += profit
+        
+        logger.info(f"Take profit filled: bought@{buy_price}, sold@{sell_price}, qty={quantity}, profit={profit:.4f}")
+
     def _sync_orders_with_exchange(self) -> None:
         """
         Synchronize local order tracking with exchange state.
@@ -478,43 +528,92 @@ class SpotBuyGrid(MarketMaker):
 
     def _refill_grid_orders(self) -> None:
         """
-        Refill missing grid orders up to maximum_order per band.
+        Refill missing grid orders using dynamic grid extension.
+        
+        Instead of using fixed price levels, this extends the grid from
+        the current lowest/highest orders, skipping any filled prices.
         """
         if not self.reference_price:
             return
-        
-        # Use the fixed reference price for grid stability
-        lower_prices, upper_prices = self._calculate_grid_levels(self.reference_price)
         
         # Count current orders
         lower_count = len(self.lower_band_orders)
         upper_count = len(self.upper_band_orders)
         
-        # Refill lower band
+        # === REFILL LOWER BAND (dynamic extension downward) ===
         if lower_count < self.max_orders_lower:
-            for price in lower_prices:
-                if price not in self.lower_band_orders and lower_count < self.max_orders_lower:
-                    # Check if ANY order exists at this price on exchange
-                    if price in self.active_order_prices:
-                        logger.debug(f"Skipping refill at {price}, order already on exchange")
-                        lower_count += 1  # Count this existing order towards the limit
-                        continue
-                        
-                    if self._place_lower_band_order(price):
-                        lower_count += 1
+            # Find the lowest current order price, or use reference if none
+            if self.lower_band_orders:
+                lowest_price = min(self.lower_band_orders.keys())
+            else:
+                # No orders exist, start from reference price
+                lowest_price = self.reference_price
+            
+            # Try to place orders extending downward
+            attempts = 0
+            max_attempts = self.max_orders_lower * 3  # Prevent infinite loop
+            next_price = lowest_price
+            
+            while lower_count < self.max_orders_lower and attempts < max_attempts:
+                attempts += 1
+                next_price = round_to_tick_size(next_price - self.grid_spacing, self.tick_size)
+                
+                if next_price <= 0:
+                    break
+                
+                # Skip if this price was already filled
+                if next_price in self.filled_lower_prices:
+                    logger.debug(f"Skipping filled price {next_price}")
+                    continue
+                
+                # Skip if order already exists at this price
+                if next_price in self.lower_band_orders:
+                    continue
+                
+                # Skip if order exists on exchange at this price
+                if next_price in self.active_order_prices:
+                    continue
+                
+                # Place the order
+                if self._place_lower_band_order(next_price):
+                    lower_count += 1
+                    logger.info(f"Refilled lower band at {next_price}")
         
-        # Refill upper band
+        # === REFILL UPPER BAND (dynamic extension upward) ===
         if upper_count < self.max_orders_upper:
-            for trigger_price in upper_prices:
-                if trigger_price not in self.upper_band_orders and upper_count < self.max_orders_upper:
-                    # Check if ANY conditional order exists at this trigger price
-                    if trigger_price in self.active_order_prices:
-                        logger.debug(f"Skipping upper refill at {trigger_price}, order already on exchange")
-                        upper_count += 1  # Count this existing order towards the limit
-                        continue
-                        
-                    if self._place_upper_band_order(trigger_price):
-                        upper_count += 1
+            # Find the highest current trigger price, or use reference if none
+            if self.upper_band_orders:
+                highest_trigger = max(self.upper_band_orders.keys())
+            else:
+                # No orders exist, start from reference price
+                highest_trigger = self.reference_price - self.grid_spacing
+            
+            # Try to place orders extending upward
+            attempts = 0
+            max_attempts = self.max_orders_upper * 3
+            next_trigger = highest_trigger
+            
+            while upper_count < self.max_orders_upper and attempts < max_attempts:
+                attempts += 1
+                next_trigger = round_to_tick_size(next_trigger + self.grid_spacing, self.tick_size)
+                
+                # Skip if this trigger was already filled
+                if next_trigger in self.filled_upper_prices:
+                    logger.debug(f"Skipping filled trigger {next_trigger}")
+                    continue
+                
+                # Skip if order already exists at this trigger
+                if next_trigger in self.upper_band_orders:
+                    continue
+                
+                # Skip if order exists on exchange at this trigger
+                if next_trigger in self.active_order_prices:
+                    continue
+                
+                # Place the order
+                if self._place_upper_band_order(next_trigger):
+                    upper_count += 1
+                    logger.info(f"Refilled upper band at trigger {next_trigger}")
         # Fetch BOTH regular orders (lower band) and conditional orders (upper band)
         # For Zoomex spot, regular limit orders and conditional (stop) orders are separate
         open_order_ids = set()
