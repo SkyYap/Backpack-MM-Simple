@@ -716,7 +716,7 @@ class ZoomexClient(BaseExchangeClient):
             return response
 
         result = response.get("result", {})
-        order_list = result.get("list") or []
+        order_list = result.get("list", [])
         
         # Return list directly for compatibility with strategies
         orders = []
@@ -770,7 +770,7 @@ class ZoomexClient(BaseExchangeClient):
             
         fills = []
         result = response.get("result", {})
-        fill_list = result.get("list") or []
+        fill_list = result.get("list", [])
         
         for fill in fill_list:
             # Normalize to strategy-expected format
@@ -1132,7 +1132,8 @@ class ZoomexClient(BaseExchangeClient):
         endpoint = "/cloud/trade/v3/order/realtime"
         params = {
             "category": "spot",
-            "orderFilter": order_filter
+            "orderFilter": order_filter,
+            "openOnly": "0"  # Open orders only
         }
         
         if symbol:
@@ -1144,7 +1145,7 @@ class ZoomexClient(BaseExchangeClient):
             return response
 
         result = response.get("result", {})
-        order_list = result.get("list") or []
+        order_list = result.get("list", [])
         
         # Return list directly for compatibility with strategies
         orders = []
@@ -1297,7 +1298,7 @@ class ZoomexClient(BaseExchangeClient):
             
         fills = []
         result = response.get("result", {})
-        fill_list = result.get("list") or []
+        fill_list = result.get("list", [])
         
         for fill in fill_list:
             side = fill.get("side", "").upper()

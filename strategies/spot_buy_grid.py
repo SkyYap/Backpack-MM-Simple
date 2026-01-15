@@ -515,88 +515,61 @@ class SpotBuyGrid(MarketMaker):
                         
                     if self._place_upper_band_order(trigger_price):
                         upper_count += 1
-        # Fetch open orders for reconciliation (Spot Regular + Conditional)
+        # Fetch BOTH regular orders (lower band) and conditional orders (upper band)
+        # For Zoomex spot, regular limit orders and conditional (stop) orders are separate
         open_order_ids = set()
         
-        # 1. Regular Orders (Lower Band)
-        reg_orders = self.client.get_spot_open_orders(self.symbol, order_filter="Order")
-        if isinstance(reg_orders, list):
-             open_order_ids.update(str(o.get('orderId')) for o in reg_orders)
-        else:
-             logger.error(f"Failed to fetch Spot open orders: {reg_orders}")
+        # 1. Fetch regular limit orders (lower band)
+        regular_orders = self.client.get_spot_open_orders(self.symbol, order_filter="Order")
+        if isinstance(regular_orders, list):
+            for o in regular_orders:
+                order_id = o.get('orderId')
+                if order_id:
+                    open_order_ids.add(str(order_id))
         
-        # 2. Conditional Orders (Upper Band)
-        stop_orders = self.client.get_spot_open_orders(self.symbol, order_filter="StopOrder")
-        if isinstance(stop_orders, list):
-             open_order_ids.update(str(o.get('orderId')) for o in stop_orders)
-        else:
-             logger.error(f"Failed to fetch Spot invalid stop orders: {stop_orders}")
+        # 2. Fetch conditional/stop orders (upper band) - use "tpslOrder" for spot TP/SL
+        # Note: For spot, conditional orders may use different filter or endpoint
+        conditional_orders = self.client.get_spot_open_orders(self.symbol, order_filter="StopOrder")
+        if isinstance(conditional_orders, list):
+            for o in conditional_orders:
+                order_id = o.get('orderId')
+                if order_id:
+                    open_order_ids.add(str(order_id))
+        
+        logger.info(f"Refill - Fetched {len(open_order_ids)} total open orders")
 
         # Check lower band orders for fills
         for price, order_info in list(self.lower_band_orders.items()):
             order_id = order_info.get('order_id')
             if order_id and order_id not in open_order_ids:
                 # Order missing from open list. Verify status with history.
-                logger.info(f"Order {order_id} missing from open list. Verifying status...")
                 history = self.client.get_spot_order_history(self.symbol, order_id=order_id)
                 
                 status = "Unknown"
                 filled_qty = 0.0
                 
                 if isinstance(history, list) and history:
-                    # History returns a list, order_id query should return 1 item
                     order_data = history[0]
                     status = order_data.get('status', 'Unknown')
                     filled_qty = float(order_data.get('filledQty', 0))
-                else:
-                    logger.warning(f"Could not find order {order_id} in history.")
                     
                 if status in ('Filled', 'PartiallyFilled') or filled_qty > 0:
-                     logger.info(f"Lower band order verified filled: price={price}, ID={order_id}, status={status}")
+                     logger.info(f"Lower band order filled: price={price}, ID={order_id}")
                      self._handle_buy_fill(price, order_info['quantity'], 'lower')
                      del self.lower_band_orders[price]
                 elif status in ('Cancelled', 'Rejected'):
-                     logger.info(f"Lower band order was {status}. Removing from memory.")
+                     logger.info(f"Lower band order {status}: price={price}")
                      del self.lower_band_orders[price]
-                else:
-                     logger.warning(f"Order {order_id} status is {status}. Keeping in memory for now.")
+                # else: keep in memory silently (status unknown or still pending)
 
-        # Check upper band orders for fills
-        for trigger_price, order_info in list(self.upper_band_orders.items()):
-            order_id = order_info.get('order_id')
-            if order_id and order_id not in open_order_ids:
-                # Order missing from open list. Verify status.
-                logger.info(f"Upper band order {order_id} missing. Verifying status...")
-                history = self.client.get_spot_order_history(self.symbol, order_id=order_id)
-                
-                status = "Unknown"
-                filled_qty = 0.0
-                
-                if isinstance(history, list) and history:
-                    order_data = history[0]
-                    status = order_data.get('status', 'Unknown')
-                    filled_qty = float(order_data.get('filledQty', 0))
-
-                if status in ('Triggered', 'Filled', 'PartiallyFilled') or filled_qty > 0:
-                    # Identify if it was triggered (stop order becomes regular order after trigger)
-                    # For Spot Grid, we treat trigger as 'fill' phase to place TP if needed, 
-                    # OR if it's actually filled.
-                    # Note: Zoomex StopOrder history status might be 'Triggered' -> then it creates a new Limit/Market order?
-                    # Let's assume for now if it's not open and Triggered/Filled, we handle it.
-                    fill_price = order_info.get('limit_price', trigger_price)
-                    logger.info(f"Upper band order verified finished: trigger={trigger_price}, ID={order_id}, status={status}")
-                    self._handle_buy_fill(fill_price, order_info['quantity'], 'upper')
-                    del self.upper_band_orders[trigger_price]
-                elif status in ('Cancelled', 'Rejected', 'Deactivated'):
-                    logger.info(f"Upper band order was {status}. Removing from memory.")
-                    del self.upper_band_orders[trigger_price]
-                else:
-                     logger.warning(f"Order {order_id} status is {status}. Keeping in memory.")
+        # NOTE: Upper band orders (conditional/stop orders) cannot be verified via
+        # get_spot_order_history on Zoomex spot API. They remain in memory and will
+        # be detected when triggered and converted to regular orders, or removed
+        # on grid reset. No action needed here.
         
         # Check take profit orders for fills
         for order_id, order_info in list(self.take_profit_orders.items()):
             if order_id not in open_order_ids:
-                logger.info(f"TP order {order_id} missing. Verifying status...")
                 history = self.client.get_spot_order_history(self.symbol, order_id=order_id)
                 
                 status = "Unknown"
@@ -608,14 +581,13 @@ class SpotBuyGrid(MarketMaker):
                     filled_qty = float(order_data.get('filledQty', 0))
                 
                 if status == 'Filled' or filled_qty >= float(order_info['quantity']) * 0.99:
-                    logger.info(f"Take profit order verified filled: ID={order_id}")
+                    logger.info(f"Take profit order filled: ID={order_id}, profit={self.take_profit_offset}")
                     self._handle_tp_fill(order_info)
                     del self.take_profit_orders[order_id]
                 elif status in ('Cancelled', 'Rejected'):
-                     logger.info(f"TP order was {status}. Removing from memory (will be orphaned).")
+                     logger.info(f"TP order {status}: ID={order_id}")
                      del self.take_profit_orders[order_id]
-                else:
-                     logger.warning(f"TP Order {order_id} status is {status}. Keeping in memory.")
+                # else: keep in memory silently
 
     # ... (handlers) ...
 
