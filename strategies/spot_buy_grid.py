@@ -143,6 +143,9 @@ class SpotBuyGrid(MarketMaker):
         # Track filled price levels to prevent duplicate orders
         self.filled_lower_prices: Set[float] = set()
         self.filled_upper_prices: Set[float] = set()
+        
+        # Track processed fill IDs to avoid duplicate detection
+        self._processed_fill_ids: Set[str] = set()
 
         logger.info("=" * 60)
         logger.info("Spot Buy Grid Strategy Initialized")
@@ -549,8 +552,35 @@ class SpotBuyGrid(MarketMaker):
                     del self.lower_band_orders[price]
                 # else: keep in memory silently
 
-        # NOTE: Upper band orders (conditional/stop orders) cannot be verified via
-        # get_spot_order_history on Zoomex spot API.
+        # Check upper band orders for fills using fill history
+        # Since conditional orders can't be tracked via order history on Zoomex,
+        # we check recent fills for buys at our upper band limit prices
+        if self.upper_band_orders:
+            fills = self.client.get_spot_fill_history(self.symbol, limit=20)
+            if isinstance(fills, list):
+                for fill in fills:
+                    fill_price = float(fill.get('price', 0))
+                    fill_side = fill.get('side', '').upper()
+                    fill_id = fill.get('fill_id') or fill.get('id')
+                    
+                    # Only process buy fills
+                    if fill_side != 'BUY':
+                        continue
+                    
+                    # Check if this fill matches any upper band order
+                    for limit_price, order_info in list(self.upper_band_orders.items()):
+                        # Match if fill price is close to our limit price (within tick size)
+                        if abs(fill_price - limit_price) <= self.tick_size * 2:
+                            # Check if we haven't already processed this fill
+                            if not hasattr(self, '_processed_fill_ids'):
+                                self._processed_fill_ids = set()
+                            
+                            if fill_id and fill_id not in self._processed_fill_ids:
+                                self._processed_fill_ids.add(fill_id)
+                                logger.info(f"Upper band order filled: limit={limit_price}, fill_price={fill_price}")
+                                self._handle_buy_fill(limit_price, order_info['quantity'], 'upper')
+                                del self.upper_band_orders[limit_price]
+                                break  # Only process one fill per iteration
         
         # Check take profit orders for fills
         for order_id, order_info in list(self.take_profit_orders.items()):
