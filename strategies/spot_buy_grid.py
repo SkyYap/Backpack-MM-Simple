@@ -382,7 +382,8 @@ class SpotBuyGrid(MarketMaker):
             buy_price + self.take_profit_offset,
             self.tick_size
         )
-        quantity = round_to_precision(quantity, self.qty_step)
+        # Use round_to_tick_size for quantity (qty_step is a float like 0.01, not an int precision)
+        quantity = round_to_tick_size(quantity, self.qty_step)
         
         order_details = {
             'symbol': self.symbol,
