@@ -570,11 +570,17 @@ class SpotBuyGrid(MarketMaker):
         """
         logger.info(f"Buy filled: price={fill_price}, qty={quantity}, band={band}")
         
+        # Round price to prevent floating point comparison issues
+        # Use 4 decimal places which matches typical tick_size precision
+        rounded_price = round(fill_price, 4)
+        
         # Track this price as filled to prevent duplicate refills
         if band == 'lower':
-            self.filled_lower_prices.add(fill_price)
+            self.filled_lower_prices.add(rounded_price)
+            logger.info(f"Added {rounded_price} to filled_lower_prices (total: {len(self.filled_lower_prices)})")
         elif band == 'upper':
-            self.filled_upper_prices.add(fill_price)
+            self.filled_upper_prices.add(rounded_price)
+            logger.info(f"Added {rounded_price} to filled_upper_prices (total: {len(self.filled_upper_prices)})")
         
         # Update statistics
         self.total_buys_filled += 1
@@ -730,92 +736,111 @@ class SpotBuyGrid(MarketMaker):
 
     def _refill_grid_orders(self) -> None:
         """
-        Refill missing grid orders using dynamic grid extension.
+        Refill missing grid orders using reference-based grid levels.
         
-        Instead of using fixed price levels, this extends the grid from
-        the current lowest/highest orders, skipping any filled prices.
+        Grid levels are always calculated from reference_price:
+        - Lower band: ref - (i * spacing) for levels below current price
+        - Upper band: ref + (i * spacing) for levels above current price
+        
+        This ensures orders are placed near current market price even after
+        significant price moves, while maintaining consistent grid spacing.
         """
         if not self.reference_price:
             return
+        
+        # Get current market price for determining which levels to use
+        ticker = self.get_ticker()
+        if "error" in ticker:
+            return
+        current_price = float(ticker.get('lastPrice', self.reference_price))
         
         # Count current orders
         lower_count = len(self.lower_band_orders)
         upper_count = len(self.upper_band_orders)
         
-        # === REFILL LOWER BAND (dynamic extension downward) ===
+        # === REFILL LOWER BAND ===
+        # Find grid levels below current price, calculated from reference
         if lower_count < self.max_orders_lower:
-            # Find the lowest current order price, or use reference if none
-            if self.lower_band_orders:
-                lowest_price = min(self.lower_band_orders.keys())
-            else:
-                # No orders exist, start from reference price
-                lowest_price = self.reference_price
+            orders_needed = self.max_orders_lower - lower_count
+            orders_placed = 0
             
-            # Try to place orders extending downward
-            attempts = 0
-            max_attempts = self.max_orders_lower * 3  # Prevent infinite loop
-            next_price = lowest_price
+            # Calculate grid levels below current price from reference
+            # Start from i=1 (first level below reference)
+            i = 1
+            max_iterations = 1000  # Safety limit to prevent infinite loop
             
-            while lower_count < self.max_orders_lower and attempts < max_attempts:
-                attempts += 1
-                next_price = round_to_tick_size(next_price - self.grid_spacing, self.tick_size)
+            while orders_placed < orders_needed and i < max_iterations:
+                # Calculate grid level from reference
+                grid_level = round(self.reference_price - (i * self.grid_spacing), 4)
+                i += 1
                 
-                if next_price <= 0:
+                if grid_level <= 0:
                     break
                 
-                # Skip if this price was already filled
-                if next_price in self.filled_lower_prices:
-                    logger.debug(f"Skipping filled price {next_price}")
+                # Skip levels at or above current price
+                if grid_level >= current_price:
+                    continue
+                
+                # Skip if already filled
+                if grid_level in self.filled_lower_prices:
+                    logger.debug(f"Skipping filled lower level {grid_level}")
                     continue
                 
                 # Skip if order already exists at this price
-                if next_price in self.lower_band_orders:
+                rounded_level = round(grid_level, 4)
+                order_exists = any(abs(p - grid_level) < 0.00001 for p in self.lower_band_orders.keys())
+                if order_exists:
                     continue
                 
                 # Skip if order exists on exchange at this price
-                if next_price in self.active_order_prices:
+                if any(abs(p - grid_level) < 0.00001 for p in self.active_order_prices):
                     continue
                 
                 # Place the order
-                if self._place_lower_band_order(next_price):
+                logger.info(f"Placing lower band at grid level {grid_level} (current price: {current_price})")
+                if self._place_lower_band_order(grid_level):
+                    orders_placed += 1
                     lower_count += 1
-                    logger.info(f"Refilled lower band at {next_price}")
         
-        # === REFILL UPPER BAND (dynamic extension upward) ===
+        # === REFILL UPPER BAND ===
+        # Find grid levels above current price, calculated from reference
         if upper_count < self.max_orders_upper:
-            # Find the highest current limit price, or use reference if none
-            if self.upper_band_orders:
-                highest_limit = max(self.upper_band_orders.keys())
-            else:
-                # No orders exist, start from reference price
-                highest_limit = self.reference_price - self.grid_spacing
+            orders_needed = self.max_orders_upper - upper_count
+            orders_placed = 0
             
-            # Try to place orders extending upward
-            attempts = 0
-            max_attempts = self.max_orders_upper * 3
-            next_limit = highest_limit
+            # Calculate grid levels above current price from reference
+            # i=0 means at reference, i=1 means reference + spacing, etc.
+            i = 0
+            max_iterations = 1000
             
-            while upper_count < self.max_orders_upper and attempts < max_attempts:
-                attempts += 1
-                next_limit = round_to_tick_size(next_limit + self.grid_spacing, self.tick_size)
+            while orders_placed < orders_needed and i < max_iterations:
+                # Calculate grid level from reference
+                grid_level = round(self.reference_price + (i * self.grid_spacing), 4)
+                i += 1
                 
-                # Skip if this limit price was already filled
-                if next_limit in self.filled_upper_prices:
-                    logger.debug(f"Skipping filled limit {next_limit}")
+                # Skip levels at or below current price
+                if grid_level <= current_price:
+                    continue
+                
+                # Skip if already filled
+                if grid_level in self.filled_upper_prices:
+                    logger.debug(f"Skipping filled upper level {grid_level}")
                     continue
                 
                 # Skip if order already exists at this limit
-                if next_limit in self.upper_band_orders:
+                order_exists = any(abs(p - grid_level) < 0.00001 for p in self.upper_band_orders.keys())
+                if order_exists:
                     continue
                 
                 # Skip if order exists on exchange at this price
-                if next_limit in self.active_order_prices:
+                if any(abs(p - grid_level) < 0.00001 for p in self.active_order_prices):
                     continue
                 
                 # Place the order (trigger = limit + offset)
-                if self._place_upper_band_order(next_limit):
+                logger.info(f"Placing upper band at grid level {grid_level} (current price: {current_price})")
+                if self._place_upper_band_order(grid_level):
+                    orders_placed += 1
                     upper_count += 1
-                    logger.info(f"Refilled upper band at limit {next_limit}")
 
 
     # ==================== Main Loop ====================
