@@ -12,7 +12,9 @@ This strategy is designed for Zoomex spot market only.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -146,6 +148,9 @@ class SpotBuyGrid(MarketMaker):
         
         # Track processed fill IDs to avoid duplicate detection
         self._processed_fill_ids: Set[str] = set()
+        
+        # State persistence file path
+        self._state_file = self._get_state_file_path()
 
         logger.info("=" * 60)
         logger.info("Spot Buy Grid Strategy Initialized")
@@ -158,6 +163,90 @@ class SpotBuyGrid(MarketMaker):
         logger.info(f"Trigger Offset: {trigger_offset}")
         logger.info(f"Take Profit Offset: {take_profit_offset}")
         logger.info("=" * 60)
+
+    def _get_state_file_path(self) -> str:
+        """Get the path for the state persistence file."""
+        # Store state file in the same directory as the script
+        state_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(state_dir, f"grid_state_{self.symbol}.json")
+
+    def _save_state(self) -> None:
+        """Save current strategy state to file for persistence across restarts."""
+        try:
+            # Convert take_profit_orders to serializable format
+            tp_orders_serializable = {}
+            for order_id, info in self.take_profit_orders.items():
+                tp_orders_serializable[order_id] = {
+                    'order_id': info.get('order_id'),
+                    'buy_price': info.get('buy_price'),
+                    'sell_price': info.get('sell_price'),
+                    'quantity': info.get('quantity'),
+                    'status': info.get('status'),
+                }
+            
+            state = {
+                'reference_price': self.reference_price,
+                'take_profit_orders': tp_orders_serializable,
+                'total_buys_filled': self.total_buys_filled,
+                'total_sells_filled': self.total_sells_filled,
+                'total_profit': self.total_profit,
+                'filled_lower_prices': list(self.filled_lower_prices),
+                'filled_upper_prices': list(self.filled_upper_prices),
+                'last_saved': datetime.now().isoformat(),
+            }
+            
+            with open(self._state_file, 'w') as f:
+                json.dump(state, f, indent=2)
+            
+            logger.debug(f"State saved: ref={self.reference_price}, TP orders={len(self.take_profit_orders)}")
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    def _load_state(self) -> bool:
+        """
+        Load saved state from file.
+        
+        Returns:
+            True if state was loaded successfully, False otherwise.
+        """
+        try:
+            if not os.path.exists(self._state_file):
+                logger.info("No saved state file found, starting fresh")
+                return False
+            
+            with open(self._state_file, 'r') as f:
+                state = json.load(f)
+            
+            # Restore reference price
+            self.reference_price = state.get('reference_price')
+            
+            # Restore statistics
+            self.total_buys_filled = state.get('total_buys_filled', 0)
+            self.total_sells_filled = state.get('total_sells_filled', 0)
+            self.total_profit = state.get('total_profit', 0.0)
+            
+            # Restore filled price tracking
+            self.filled_lower_prices = set(state.get('filled_lower_prices', []))
+            self.filled_upper_prices = set(state.get('filled_upper_prices', []))
+            
+            # Restore take profit orders
+            saved_tp_orders = state.get('take_profit_orders', {})
+            for order_id, info in saved_tp_orders.items():
+                self.take_profit_orders[order_id] = {
+                    'order_id': info.get('order_id'),
+                    'buy_price': info.get('buy_price'),
+                    'sell_price': info.get('sell_price'),
+                    'quantity': info.get('quantity'),
+                    'status': info.get('status'),
+                }
+            
+            logger.info(f"State loaded: ref={self.reference_price}, TP orders={len(self.take_profit_orders)}, "
+                       f"buys={self.total_buys_filled}, sells={self.total_sells_filled}, profit={self.total_profit}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load state: {e}")
+            return False
 
     # ==================== Balance Methods ====================
 
@@ -200,26 +289,14 @@ class SpotBuyGrid(MarketMaker):
         """
         Initialize the grid with orders on both bands.
         
+        If saved state exists, restores reference price and re-places TP orders.
+        
         Returns:
             True if successful, False otherwise
         """
         logger.info("Initializing spot buy grid...")
         
-        # Get current price
-        ticker = self.get_ticker()
-        if "error" in ticker:
-            logger.error(f"Failed to get ticker: {ticker['error']}")
-            return False
-        
-        current_price = float(ticker.get('lastPrice', 0))
-        if current_price <= 0:
-            logger.error("Invalid current price")
-            return False
-        
-        self.reference_price = current_price
-        logger.info(f"Reference price: {current_price}")
-        
-        # Get symbol info for precision
+        # Get symbol info first (needed for rounding)
         symbol_info = self.client.get_spot_symbol_info(self.symbol)
         if not symbol_info:
             logger.error(f"Failed to get symbol info for {self.symbol}")
@@ -231,14 +308,52 @@ class SpotBuyGrid(MarketMaker):
         
         logger.info(f"Symbol Info: tick_size={self.tick_size}, qty_step={self.qty_step}")
         
-        # Calculate grid levels
-        lower_prices, upper_prices = self._calculate_grid_levels(current_price)
+        # Try to load saved state
+        state_loaded = self._load_state()
+        
+        if state_loaded and self.reference_price:
+            logger.info(f"Resuming from saved state with reference price: {self.reference_price}")
+            
+            # Re-place TP orders that were saved
+            # First, get a copy of saved TP orders and clear the dict
+            saved_tp_orders = dict(self.take_profit_orders)
+            self.take_profit_orders.clear()
+            
+            # Cancel existing orders and re-place
+            self._cancel_all_orders()
+            
+            # Re-place each TP order
+            for old_order_id, order_info in saved_tp_orders.items():
+                buy_price = order_info.get('buy_price')
+                quantity = order_info.get('quantity')
+                if buy_price and quantity:
+                    logger.info(f"Re-placing TP order: buy_price={buy_price}, qty={quantity}")
+                    self._place_take_profit_order(buy_price, quantity)
+            
+            logger.info(f"Re-placed {len(self.take_profit_orders)} take profit orders")
+        else:
+            # No saved state, use current price
+            ticker = self.get_ticker()
+            if "error" in ticker:
+                logger.error(f"Failed to get ticker: {ticker['error']}")
+                return False
+            
+            current_price = float(ticker.get('lastPrice', 0))
+            if current_price <= 0:
+                logger.error("Invalid current price")
+                return False
+            
+            self.reference_price = current_price
+            logger.info(f"Starting fresh with reference price: {current_price}")
+            
+            # Cancel any existing orders
+            self._cancel_all_orders()
+        
+        # Calculate grid levels based on reference price
+        lower_prices, upper_prices = self._calculate_grid_levels(self.reference_price)
         
         logger.info(f"Lower band prices: {lower_prices}")
         logger.info(f"Upper band prices: {upper_prices}")
-        
-        # Cancel any existing orders
-        self._cancel_all_orders()
         
         # Place lower band orders (post-only limit buys)
         placed_lower = 0
@@ -257,6 +372,9 @@ class SpotBuyGrid(MarketMaker):
                 placed_upper += 1
         
         logger.info(f"Placed {placed_upper} upper band orders")
+        
+        # Save state after initialization
+        self._save_state()
         
         self.grid_initialized = True
         return True
@@ -466,6 +584,9 @@ class SpotBuyGrid(MarketMaker):
             self._place_take_profit_order(fill_price, quantity)
         else:
             logger.info("No take profit offset configured, skipping TP order")
+        
+        # Save state after fill
+        self._save_state()
 
     def _handle_tp_fill(self, order_info: Dict[str, Any]) -> None:
         """
@@ -486,6 +607,9 @@ class SpotBuyGrid(MarketMaker):
         self.total_profit += profit
         
         logger.info(f"Take profit filled: bought@{buy_price}, sold@{sell_price}, qty={quantity}, profit={profit:.4f}")
+        
+        # Save state after profit recorded
+        self._save_state()
 
     def _sync_orders_with_exchange(self) -> None:
         """
@@ -786,6 +910,9 @@ class SpotBuyGrid(MarketMaker):
             logger.info("Received interrupt signal")
         finally:
             logger.info("Cleaning up...")
+            # Save state before canceling orders so we can restore on restart
+            self._save_state()
+            logger.info(f"State saved to {self._state_file}")
             self._cancel_all_orders()
             logger.info(self._get_extra_summary_sections())
             logger.info("Spot Buy Grid Strategy stopped")

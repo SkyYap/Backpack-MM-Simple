@@ -6,3 +6,4 @@ __pycache__/
 .claude/settings.local.json
 .venv
 .python-version
+strategies/grid_state_MNTUSDT.json
