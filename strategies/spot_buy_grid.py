@@ -570,9 +570,8 @@ class SpotBuyGrid(MarketMaker):
         """
         logger.info(f"Buy filled: price={fill_price}, qty={quantity}, band={band}")
         
-        # Round price to prevent floating point comparison issues
-        # Use 4 decimal places which matches typical tick_size precision
-        rounded_price = round(fill_price, 4)
+        # Round price using tick_size for consistent comparison with grid levels
+        rounded_price = round_to_tick_size(fill_price, self.tick_size)
         
         # Track this price as filled to prevent duplicate refills
         if band == 'lower':
@@ -758,6 +757,9 @@ class SpotBuyGrid(MarketMaker):
         lower_count = len(self.lower_band_orders)
         upper_count = len(self.upper_band_orders)
         
+        # Debug log to verify values being used
+        logger.debug(f"Refill params: ref={self.reference_price}, spacing={self.grid_spacing}, current={current_price}")
+        
         # === REFILL LOWER BAND ===
         # Find grid levels below current price, calculated from reference
         if lower_count < self.max_orders_lower:
@@ -770,8 +772,11 @@ class SpotBuyGrid(MarketMaker):
             max_iterations = 1000  # Safety limit to prevent infinite loop
             
             while orders_placed < orders_needed and i < max_iterations:
-                # Calculate grid level from reference
-                grid_level = round(self.reference_price - (i * self.grid_spacing), 4)
+                # Calculate grid level from reference using tick_size for precise rounding
+                grid_level = round_to_tick_size(
+                    self.reference_price - (i * self.grid_spacing), 
+                    self.tick_size
+                )
                 i += 1
                 
                 if grid_level <= 0:
@@ -814,8 +819,11 @@ class SpotBuyGrid(MarketMaker):
             max_iterations = 1000
             
             while orders_placed < orders_needed and i < max_iterations:
-                # Calculate grid level from reference
-                grid_level = round(self.reference_price + (i * self.grid_spacing), 4)
+                # Calculate grid level from reference using tick_size for precise rounding
+                grid_level = round_to_tick_size(
+                    self.reference_price + (i * self.grid_spacing), 
+                    self.tick_size
+                )
                 i += 1
                 
                 # Skip levels at or below current price
