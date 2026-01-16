@@ -332,7 +332,7 @@ class SpotBuyGrid(MarketMaker):
             
             logger.info(f"Re-placed {len(self.take_profit_orders)} take profit orders")
         else:
-            # No saved state, use current price
+            # No saved state, use current price as reference
             ticker = self.get_ticker()
             if "error" in ticker:
                 logger.error(f"Failed to get ticker: {ticker['error']}")
@@ -349,11 +349,52 @@ class SpotBuyGrid(MarketMaker):
             # Cancel any existing orders
             self._cancel_all_orders()
         
-        # Calculate grid levels based on reference price
-        lower_prices, upper_prices = self._calculate_grid_levels(self.reference_price)
+        # Get current market price for placing orders relative to current price
+        ticker = self.get_ticker()
+        if "error" in ticker:
+            logger.error(f"Failed to get ticker: {ticker['error']}")
+            return False
+        current_price = float(ticker.get('lastPrice', self.reference_price))
         
-        logger.info(f"Lower band prices: {lower_prices}")
-        logger.info(f"Upper band prices: {upper_prices}")
+        logger.info(f"Reference price: {self.reference_price}, Current price: {current_price}")
+        
+        # === PLACE LOWER BAND ORDERS ===
+        # Find grid levels below current market price, calculated from reference
+        lower_prices = []
+        i = 1
+        while len(lower_prices) < self.max_orders_lower and i < 1000:
+            grid_level = round_to_tick_size(
+                self.reference_price - (i * self.grid_spacing),
+                self.tick_size
+            )
+            i += 1
+            if grid_level <= 0:
+                break
+            # Only include levels below current price
+            if grid_level < current_price:
+                # Skip if already filled
+                if grid_level not in self.filled_lower_prices:
+                    lower_prices.append(grid_level)
+        
+        logger.info(f"Lower band prices (below current {current_price}): {lower_prices}")
+        
+        # === PLACE UPPER BAND ORDERS ===
+        # Find grid levels above current market price, calculated from reference
+        upper_prices = []
+        i = 0
+        while len(upper_prices) < self.max_orders_upper and i < 1000:
+            grid_level = round_to_tick_size(
+                self.reference_price + (i * self.grid_spacing),
+                self.tick_size
+            )
+            i += 1
+            # Only include levels above current price
+            if grid_level > current_price:
+                # Skip if already filled
+                if grid_level not in self.filled_upper_prices:
+                    upper_prices.append(grid_level)
+        
+        logger.info(f"Upper band prices (above current {current_price}): {upper_prices}")
         
         # Place lower band orders (post-only limit buys)
         placed_lower = 0
