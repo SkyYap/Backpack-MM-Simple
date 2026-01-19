@@ -639,6 +639,8 @@ class SpotBuyGrid(MarketMaker):
         """
         Handle a take profit order fill - record profit and update stats.
         
+        After TP fill, the grid level becomes available again for new orders.
+        
         Args:
             order_info: Dictionary with buy_price, sell_price, quantity
         """
@@ -654,6 +656,15 @@ class SpotBuyGrid(MarketMaker):
         self.total_profit += profit
         
         logger.info(f"Take profit filled: bought@{buy_price}, sold@{sell_price}, qty={quantity}, profit={profit:.4f}")
+        
+        # CYCLIC GRID: Remove buy_price from filled sets so the level can be reused
+        rounded_price = round_to_tick_size(buy_price, self.tick_size)
+        if rounded_price in self.filled_lower_prices:
+            self.filled_lower_prices.discard(rounded_price)
+            logger.info(f"Removed {rounded_price} from filled_lower_prices - level available for reuse")
+        if rounded_price in self.filled_upper_prices:
+            self.filled_upper_prices.discard(rounded_price)
+            logger.info(f"Removed {rounded_price} from filled_upper_prices - level available for reuse")
         
         # Save state after profit recorded
         self._save_state()
