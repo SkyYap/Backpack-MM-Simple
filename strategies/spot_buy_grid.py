@@ -151,6 +151,9 @@ class SpotBuyGrid(MarketMaker):
         
         # State persistence file path
         self._state_file = self._get_state_file_path()
+        
+        # Sell-only mode: stop all buying, keep only TP sells active
+        self.sell_only_mode = False
 
         logger.info("=" * 60)
         logger.info("Spot Buy Grid Strategy Initialized")
@@ -247,6 +250,57 @@ class SpotBuyGrid(MarketMaker):
         except Exception as e:
             logger.error(f"Failed to load state: {e}")
             return False
+
+    # ==================== Sell Only Mode ====================
+
+    def enable_sell_only_mode(self) -> None:
+        """
+        Enable sell-only mode - cancel all buy orders, stop refilling.
+        
+        TP sell orders remain active to liquidate existing positions.
+        """
+        logger.info("Enabling sell-only mode...")
+        self.sell_only_mode = True
+        
+        # Cancel all lower band orders (limit buys)
+        cancelled_lower = 0
+        for price, order_info in list(self.lower_band_orders.items()):
+            order_id = order_info.get('order_id')
+            if order_id:
+                try:
+                    self.client.cancel_spot_order(order_id, self.symbol)
+                    cancelled_lower += 1
+                except Exception as e:
+                    logger.error(f"Failed to cancel lower order {order_id}: {e}")
+        self.lower_band_orders.clear()
+        
+        # Cancel all upper band orders (conditional buys)
+        cancelled_upper = 0
+        for price, order_info in list(self.upper_band_orders.items()):
+            order_id = order_info.get('order_id')
+            if order_id:
+                try:
+                    self.client.cancel_spot_order(order_id, self.symbol)
+                    cancelled_upper += 1
+                except Exception as e:
+                    logger.error(f"Failed to cancel upper order {order_id}: {e}")
+        self.upper_band_orders.clear()
+        
+        logger.info(f"Sell-only mode ENABLED - Cancelled {cancelled_lower} lower + {cancelled_upper} upper buy orders")
+        logger.info(f"TP sell orders still active: {len(self.take_profit_orders)}")
+
+    def disable_sell_only_mode(self) -> None:
+        """
+        Disable sell-only mode and resume normal grid operation.
+        
+        The next refill cycle will place new buy orders.
+        """
+        self.sell_only_mode = False
+        logger.info("Sell-only mode DISABLED - Resuming normal grid operation")
+
+    def is_sell_only_mode(self) -> bool:
+        """Check if sell-only mode is active."""
+        return self.sell_only_mode
 
     # ==================== Balance Methods ====================
 
@@ -798,6 +852,10 @@ class SpotBuyGrid(MarketMaker):
         significant price moves, while maintaining consistent grid spacing.
         """
         if not self.reference_price:
+            return
+        
+        # Don't refill if in sell-only mode
+        if self.sell_only_mode:
             return
         
         # Get current market price for determining which levels to use

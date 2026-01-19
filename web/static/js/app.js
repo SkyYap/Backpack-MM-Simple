@@ -8,6 +8,7 @@ let heartbeatInterval = null;
 const form = document.getElementById('botConfigForm');
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
+const sellOnlyBtn = document.getElementById('sellOnlyBtn');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const connectionStatus = document.getElementById('connectionStatus');
@@ -167,6 +168,13 @@ function setupEventListeners() {
     if (setLeverageBtn) {
         setLeverageBtn.addEventListener('click', async () => {
             await setLeverage();
+        });
+    }
+
+    // 純賣模式按鈕
+    if (sellOnlyBtn) {
+        sellOnlyBtn.addEventListener('click', async () => {
+            await toggleSellOnly();
         });
     }
 }
@@ -781,6 +789,60 @@ async function stopBot() {
     }
 }
 
+// 切換純賣模式
+let sellOnlyMode = false;
+
+async function toggleSellOnly() {
+    if (!botRunning) {
+        addLog('機器人未在運行', 'warning');
+        return;
+    }
+
+    const newState = !sellOnlyMode;
+    sellOnlyBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/sell_only', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ enabled: newState })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            sellOnlyMode = result.sell_only_mode;
+            updateSellOnlyButton();
+            addLog(result.message, sellOnlyMode ? 'warning' : 'success');
+        } else {
+            addLog(`切換純賣模式失敗: ${result.message}`, 'error');
+        }
+    } catch (error) {
+        console.error('切換純賣模式失敗:', error);
+        addLog(`切換純賣模式失敗: ${error.message}`, 'error');
+    } finally {
+        sellOnlyBtn.disabled = false;
+    }
+}
+
+// 更新純賣模式按鈕外觀
+function updateSellOnlyButton() {
+    const btnText = document.getElementById('sellOnlyBtnText');
+    if (sellOnlyMode) {
+        sellOnlyBtn.classList.add('active');
+        sellOnlyBtn.classList.remove('btn-warning');
+        sellOnlyBtn.classList.add('btn-success');
+        if (btnText) btnText.textContent = '恢復買入';
+    } else {
+        sellOnlyBtn.classList.remove('active');
+        sellOnlyBtn.classList.remove('btn-success');
+        sellOnlyBtn.classList.add('btn-warning');
+        if (btnText) btnText.textContent = '純賣模式';
+    }
+}
+
 // 更新連接狀態
 function updateConnectionStatus(text, connected) {
     statusText.textContent = text;
@@ -975,6 +1037,15 @@ function updateUIForRunningState(running, config = null) {
             let strategyName = config.strategy === 'standard' ? '標準' : '對沖';
             let marketName = config.market_type === 'spot' ? '現貨' : '永續';
             currentConfig.textContent = `${config.exchange} - ${config.symbol} (${marketName}/${strategyName})`;
+
+            // 只有 spot_buy_grid 策略顯示純賣模式按鈕
+            if (sellOnlyBtn) {
+                if (config.strategy === 'spot_buy_grid') {
+                    sellOnlyBtn.style.display = 'inline-flex';
+                } else {
+                    sellOnlyBtn.style.display = 'none';
+                }
+            }
         }
         botStatus.textContent = '運行中';
 
@@ -994,6 +1065,13 @@ function updateUIForRunningState(running, config = null) {
 
         currentConfig.textContent = '無';
         botStatus.textContent = '未啟動';
+
+        // 隱藏純賣模式按鈕並重置狀態
+        if (sellOnlyBtn) {
+            sellOnlyBtn.style.display = 'none';
+        }
+        sellOnlyMode = false;
+        updateSellOnlyButton();
 
         // 隱藏統計區域
         if (statsSection) {

@@ -545,6 +545,47 @@ def stop_bot():
         return jsonify({'success': False, 'message': f'停止失敗: {str(e)}'}), 500
 
 
+@app.route('/api/sell_only', methods=['POST'])
+def toggle_sell_only():
+    """Toggle sell-only mode - cancel all buys, keep only TP sells"""
+    global current_strategy
+    
+    if not bot_status['running'] or not current_strategy:
+        return jsonify({'success': False, 'message': '機器人未在運行'}), 400
+    
+    try:
+        data = request.get_json() or {}
+        enabled = data.get('enabled', True)
+        
+        # Check if strategy supports sell-only mode
+        if not hasattr(current_strategy, 'enable_sell_only_mode'):
+            return jsonify({'success': False, 'message': '當前策略不支援純賣模式'}), 400
+        
+        if enabled:
+            current_strategy.enable_sell_only_mode()
+            message = '純賣模式已啟用 - 所有買單已取消，停止買入'
+        else:
+            current_strategy.disable_sell_only_mode()
+            message = '純賣模式已禁用 - 恢復正常網格操作'
+        
+        # Get current mode status
+        is_sell_only = current_strategy.is_sell_only_mode() if hasattr(current_strategy, 'is_sell_only_mode') else enabled
+        
+        logger.info(message)
+        socketio.emit('sell_only_update', {'enabled': is_sell_only, 'message': message})
+        
+        return jsonify({
+            'success': True, 
+            'message': message,
+            'sell_only_mode': is_sell_only
+        })
+        
+    except Exception as e:
+        logger.error(f"切換純賣模式失敗: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'切換失敗: {str(e)}'}), 500
+
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """獲取配置信息"""
