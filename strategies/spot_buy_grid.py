@@ -868,6 +868,80 @@ class SpotBuyGrid(MarketMaker):
         lower_count = len(self.lower_band_orders)
         upper_count = len(self.upper_band_orders)
         
+        # === REBALANCE LOWER BAND ===
+        # If at max orders but a closer level is available, cancel furthest and refill closer
+        if lower_count >= self.max_orders_lower and self.lower_band_orders:
+            # Find the closest available grid level below current price
+            closest_available = None
+            i = 1
+            max_check = 100
+            while i < max_check:
+                grid_level = round(self.reference_price - (i * self.grid_spacing), 4)
+                i += 1
+                if grid_level <= 0 or grid_level >= current_price:
+                    continue
+                # Check if this level is available (not filled, not already ordered)
+                if grid_level not in self.filled_lower_prices:
+                    order_exists = any(abs(p - grid_level) < 0.00001 for p in self.lower_band_orders.keys())
+                    if not order_exists:
+                        closest_available = grid_level
+                        break
+            
+            if closest_available:
+                # Find the furthest existing order
+                furthest_price = min(self.lower_band_orders.keys())
+                
+                # Only rebalance if closest available is closer than furthest existing
+                if closest_available > furthest_price:
+                    logger.info(f"Rebalancing lower band: cancel {furthest_price}, will place {closest_available}")
+                    order_info = self.lower_band_orders[furthest_price]
+                    order_id = order_info.get('order_id')
+                    if order_id:
+                        try:
+                            self.client.cancel_spot_order(order_id, self.symbol)
+                            del self.lower_band_orders[furthest_price]
+                            lower_count -= 1
+                            logger.info(f"Cancelled furthest lower order at {furthest_price}")
+                        except Exception as e:
+                            logger.error(f"Failed to cancel for rebalance: {e}")
+        
+        # === REBALANCE UPPER BAND ===
+        # If at max orders but a closer level is available, cancel furthest and refill closer
+        if upper_count >= self.max_orders_upper and self.upper_band_orders:
+            # Find the closest available grid level above current price
+            closest_available = None
+            i = 0
+            max_check = 100
+            while i < max_check:
+                grid_level = round(self.reference_price + (i * self.grid_spacing), 4)
+                i += 1
+                if grid_level <= current_price:
+                    continue
+                # Check if this level is available (not filled, not already ordered)
+                if grid_level not in self.filled_upper_prices:
+                    order_exists = any(abs(p - grid_level) < 0.00001 for p in self.upper_band_orders.keys())
+                    if not order_exists:
+                        closest_available = grid_level
+                        break
+            
+            if closest_available:
+                # Find the furthest existing order (highest price for upper band)
+                furthest_price = max(self.upper_band_orders.keys())
+                
+                # Only rebalance if closest available is closer than furthest existing
+                if closest_available < furthest_price:
+                    logger.info(f"Rebalancing upper band: cancel {furthest_price}, will place {closest_available}")
+                    order_info = self.upper_band_orders[furthest_price]
+                    order_id = order_info.get('order_id')
+                    if order_id:
+                        try:
+                            self.client.cancel_spot_order(order_id, self.symbol)
+                            del self.upper_band_orders[furthest_price]
+                            upper_count -= 1
+                            logger.info(f"Cancelled furthest upper order at {furthest_price}")
+                        except Exception as e:
+                            logger.error(f"Failed to cancel for rebalance: {e}")
+        
         # === REFILL LOWER BAND ===
         # Find grid levels below current price, calculated from reference
         if lower_count < self.max_orders_lower:
