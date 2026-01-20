@@ -67,6 +67,7 @@ class SpotBuyGrid(MarketMaker):
         order_quantity: Optional[float] = None,     # Size per order
         trigger_offset: float = 0.0,                # Upper band: offset from trigger to limit
         take_profit_offset: float = 0.0,            # Take profit offset from buy price
+        trading_fee: float = 0.001,                 # Trading fee as decimal (0.001 = 0.1%)
         exchange: str = 'zoomex',
         exchange_config: Optional[Dict[str, Any]] = None,
         enable_database: bool = True,
@@ -84,6 +85,7 @@ class SpotBuyGrid(MarketMaker):
             order_quantity: Size per order in base asset
             trigger_offset: For upper band, offset between trigger and limit price
             take_profit_offset: Profit offset for sell orders
+            trading_fee: Trading fee as decimal (e.g., 0.001 = 0.1%), used to reduce TP quantity
             exchange: Exchange name (must be 'zoomex')
             exchange_config: Exchange configuration
             enable_database: Whether to enable database logging
@@ -116,6 +118,7 @@ class SpotBuyGrid(MarketMaker):
         self.max_orders_lower = max_orders_lower
         self.trigger_offset = trigger_offset
         self.take_profit_offset = take_profit_offset
+        self.trading_fee = trading_fee  # Trading fee as decimal (0.001 = 0.1%)
 
         # Grid state tracking
         self.grid_initialized = False
@@ -165,6 +168,7 @@ class SpotBuyGrid(MarketMaker):
         logger.info(f"Order Quantity: {order_quantity}")
         logger.info(f"Trigger Offset: {trigger_offset}")
         logger.info(f"Take Profit Offset: {take_profit_offset}")
+        logger.info(f"Trading Fee: {trading_fee * 100:.2f}%")
         logger.info("=" * 60)
 
     def _get_state_file_path(self) -> str:
@@ -385,6 +389,31 @@ class SpotBuyGrid(MarketMaker):
                     self._place_take_profit_order(buy_price, quantity)
             
             logger.info(f"Re-placed {len(self.take_profit_orders)} take profit orders")
+            
+            # RECOVERY: Check for filled prices without corresponding TP orders
+            if self.take_profit_offset > 0:
+                # Get all buy prices that have TP orders
+                tp_buy_prices = set()
+                for order_info in self.take_profit_orders.values():
+                    tp_buy_prices.add(round(order_info.get('buy_price', 0), 4))
+                
+                # Check filled_lower_prices for missing TPs
+                for filled_price in list(self.filled_lower_prices):
+                    rounded_price = round(filled_price, 4)
+                    if rounded_price not in tp_buy_prices:
+                        logger.warning(f"RECOVERY: Missing TP for filled lower price {rounded_price}, placing now")
+                        if self._place_take_profit_order(rounded_price, self.order_quantity):
+                            tp_buy_prices.add(rounded_price)
+                
+                # Check filled_upper_prices for missing TPs
+                for filled_price in list(self.filled_upper_prices):
+                    rounded_price = round(filled_price, 4)
+                    if rounded_price not in tp_buy_prices:
+                        logger.warning(f"RECOVERY: Missing TP for filled upper price {rounded_price}, placing now")
+                        if self._place_take_profit_order(rounded_price, self.order_quantity):
+                            tp_buy_prices.add(rounded_price)
+                
+                logger.info(f"Recovery complete. Total TP orders: {len(self.take_profit_orders)}")
         else:
             # No saved state, use current price as reference
             ticker = self.get_ticker()
@@ -595,20 +624,22 @@ class SpotBuyGrid(MarketMaker):
             buy_price + self.take_profit_offset,
             self.tick_size
         )
-        # Use round_to_tick_size for quantity (qty_step is a float like 0.01, not an int precision)
-        quantity = round_to_tick_size(quantity, self.qty_step)
+        # Reduce quantity by trading fee to prevent insufficient balance
+        # e.g., if fee is 0.1%, actual received is quantity * (1 - 0.001)
+        adjusted_quantity = quantity * (1 - self.trading_fee)
+        adjusted_quantity = round_to_tick_size(adjusted_quantity, self.qty_step)
         
         order_details = {
             'symbol': self.symbol,
             'side': 'Sell',
             'orderType': 'Limit',
-            'qty': quantity,
+            'qty': adjusted_quantity,
             'price': tp_price,
             'timeInForce': 'PostOnly',
             'orderFilter': 'Order',
         }
         
-        logger.info(f"Placing take profit sell: price={tp_price}, qty={quantity}, buy_price={buy_price}")
+        logger.info(f"Placing take profit sell: price={tp_price}, qty={adjusted_quantity} (original: {quantity}, fee: {self.trading_fee*100:.2f}%), buy_price={buy_price}")
         response = self.client.execute_spot_order(order_details)
         
         if "error" in response:
@@ -617,9 +648,11 @@ class SpotBuyGrid(MarketMaker):
         
         order_id = response.get('orderId')
         if order_id:
+            # Store rounded buy_price to match what's in filled sets
+            rounded_buy_price = round(buy_price, 4)
             self.take_profit_orders[order_id] = {
                 'order_id': order_id,
-                'buy_price': buy_price,
+                'buy_price': rounded_buy_price,
                 'sell_price': tp_price,
                 'quantity': quantity,
                 'status': 'open',
@@ -664,9 +697,9 @@ class SpotBuyGrid(MarketMaker):
             band: Which band the order was from ('lower' or 'upper')
         """
         logger.info(f"Buy filled: price={fill_price}, qty={quantity}, band={band}")
-        
-        # Round price to prevent floating point comparison issues
-        # Use 4 decimal places which matches typical tick_size precision
+    
+        # Round price consistently using round() with 4 decimals
+        # This must match how we remove in _handle_tp_fill
         rounded_price = round(fill_price, 4)
         
         # Track this price as filled to prevent duplicate refills
@@ -710,9 +743,10 @@ class SpotBuyGrid(MarketMaker):
         self.total_profit += profit
         
         logger.info(f"Take profit filled: bought@{buy_price}, sold@{sell_price}, qty={quantity}, profit={profit:.4f}")
-        
+    
         # CYCLIC GRID: Remove buy_price from filled sets so the level can be reused
-        rounded_price = round_to_tick_size(buy_price, self.tick_size)
+        # Use round() with 4 decimals to match how filled prices are stored
+        rounded_price = round(buy_price, 4)
         if rounded_price in self.filled_lower_prices:
             self.filled_lower_prices.discard(rounded_price)
             logger.info(f"Removed {rounded_price} from filled_lower_prices - level available for reuse")
@@ -819,26 +853,39 @@ class SpotBuyGrid(MarketMaker):
                                 del self.upper_band_orders[limit_price]
                                 break  # Only process one fill per iteration
         
-        # Check take profit orders for fills
-        for order_id, order_info in list(self.take_profit_orders.items()):
-            if order_id not in open_order_ids:
-                history = self.client.get_spot_order_history(self.symbol, order_id=order_id)
-                
-                status = "Unknown"
-                filled_qty = 0.0
-                
-                if isinstance(history, list) and history:
-                    order_data = history[0]
-                    status = order_data.get('status', 'Unknown')
-                    filled_qty = float(order_data.get('filledQty', 0))
-                
-                if status == 'Filled' or filled_qty >= float(order_info['quantity']) * 0.99:
-                    logger.info(f"Take profit order filled: ID={order_id}")
-                    self._handle_tp_fill(order_info)
-                    del self.take_profit_orders[order_id]
-                elif status in ('Cancelled', 'Rejected'):
-                    logger.info(f"TP order {status}: ID={order_id}")
-                    del self.take_profit_orders[order_id]
+        # Check take profit orders for fills using FILL HISTORY
+        # (order history API returns empty for spot orders on Zoomex)
+        if self.take_profit_orders:
+            fills = self.client.get_spot_fill_history(self.symbol, limit=50)
+            if isinstance(fills, list):
+                for fill in fills:
+                    fill_price = float(fill.get('price', 0))
+                    fill_side = fill.get('side', '').upper()
+                    fill_id = fill.get('fill_id') or fill.get('id') or fill.get('execId')
+                    
+                    # Debug: log each fill to see format
+                    logger.debug(f"Fill history entry: price={fill_price}, side={fill_side}, id={fill_id}, raw_side={fill.get('side')}")
+                    
+                    # Only process SELL fills (TP orders are sells)
+                    if fill_side not in ('SELL', 'Sell'):
+                        continue
+                    
+                    # Check if this fill matches any TP order's sell price
+                    for order_id, order_info in list(self.take_profit_orders.items()):
+                        tp_sell_price = float(order_info.get('sell_price', 0))
+                        
+                        # Match if fill price is close to our TP sell price
+                        if abs(fill_price - tp_sell_price) <= self.tick_size * 2:
+                            # Check if order is no longer in open orders
+                            if order_id not in open_order_ids:
+                                # Avoid duplicate processing
+                                tp_fill_key = f"tp_{order_id}_{fill_id}"
+                                if tp_fill_key not in self._processed_fill_ids:
+                                    self._processed_fill_ids.add(tp_fill_key)
+                                    logger.info(f"TP sell filled via fill history: ID={order_id}, sell_price={fill_price}, buy_price={order_info.get('buy_price')}")
+                                    self._handle_tp_fill(order_info)
+                                    del self.take_profit_orders[order_id]
+                                    break
 
     def _refill_grid_orders(self) -> None:
         """
