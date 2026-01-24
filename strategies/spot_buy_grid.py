@@ -728,6 +728,12 @@ class SpotBuyGrid(MarketMaker):
         
         After TP fill, the grid level becomes available again for new orders.
         
+        Net profit calculation:
+        - Buy fee = trading_fee × quantity × buy_price
+        - Sell qty = quantity × (1 - trading_fee)  [after buy fee deduction]
+        - Sell fee = trading_fee × sell_qty × sell_price
+        - Net profit = (sell_qty × sell_price) - (quantity × buy_price) - buy_fee - sell_fee
+        
         Args:
             order_info: Dictionary with buy_price, sell_price, quantity
         """
@@ -735,14 +741,32 @@ class SpotBuyGrid(MarketMaker):
         sell_price = order_info.get('sell_price', 0)
         quantity = order_info.get('quantity', 0)
         
-        # Calculate profit
-        profit = (sell_price - buy_price) * quantity
+        # Calculate net profit with correct fee deduction
+        # 1. Buy: spend (quantity × buy_price), pay fee on this amount
+        buy_cost = quantity * buy_price
+        buy_fee = self.trading_fee * buy_cost
+        
+        # 2. After buy, receive: quantity × (1 - trading_fee)
+        received_qty = quantity * (1 - self.trading_fee)
+        
+        # 3. Sell: receive (received_qty × sell_price), pay fee on this amount
+        sell_revenue = received_qty * sell_price
+        sell_fee = self.trading_fee * sell_revenue
+        
+        # 4. Net profit = sell revenue - sell fee - buy cost - buy fee
+        #    Simplified: sell revenue - buy cost - buy fee - sell fee
+        gross_profit = sell_revenue - buy_cost
+        total_fees = buy_fee + sell_fee
+        net_profit = gross_profit - total_fees
         
         # Update statistics
         self.total_sells_filled += 1
-        self.total_profit += profit
+        self.total_profit += net_profit
         
-        logger.info(f"Take profit filled: bought@{buy_price}, sold@{sell_price}, qty={quantity}, profit={profit:.4f}")
+        logger.info(
+            f"Take profit filled: bought@{buy_price}, sold@{sell_price}, qty={quantity}, "
+            f"gross={gross_profit:.4f}, fees={total_fees:.4f}, net={net_profit:.4f}"
+        )
     
         # CYCLIC GRID: Remove buy_price from filled sets so the level can be reused
         # Use round() with 4 decimals to match how filled prices are stored
