@@ -796,7 +796,7 @@ class SpotBuyGrid(MarketMaker):
         conditional_orders = self.client.get_spot_open_orders(self.symbol, order_filter="StopOrder")
         if isinstance(conditional_orders, dict) and "error" in conditional_orders:
             logger.error(f"Failed to get conditional orders: {conditional_orders['error']}")
-            conditional_orders = []
+            return
         
         # Combine all open order IDs and Prices
         open_order_ids = set()

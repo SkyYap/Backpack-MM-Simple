@@ -40,6 +40,9 @@ class ZoomexClient(BaseExchangeClient):
         self.recv_window = config.get("recv_window", "5000")
         self.category = config.get("category", "linear")  # linear, inverse, spot
         self.position_mode = config.get("position_mode", "hedge")  # "hedge" or "one_way"
+        
+        # Time synchronization offset (server_time - local_time)
+        self.time_offset = 0
 
         # Proxy configuration
         self.proxies = get_proxy_config()
@@ -51,9 +54,38 @@ class ZoomexClient(BaseExchangeClient):
 
     async def connect(self) -> None:
         logger.info("Zoomex client connected")
+        # Sync time on connection
+        self.sync_time()
 
     async def disconnect(self) -> None:
         logger.info("Zoomex client disconnected")
+        
+    def sync_time(self) -> bool:
+        """Synchronize local time with server time."""
+        try:
+            # Zoomex public time endpoint
+            response = self.make_request("GET", "/v3/public/time")
+            
+            if "error" in response:
+                logger.warning(f"Failed to sync time: {response['error']}")
+                return False
+                
+            result = response.get("result", {})
+            server_time = float(result.get("timeSecond", 0)) * 1000
+            if not server_time:
+                # Try alternative field names just in case
+                server_time = float(result.get("timeNow", 0)) * 1000
+                
+            if server_time > 0:
+                local_time = time.time() * 1000
+                self.time_offset = int(server_time - local_time)
+                logger.info(f"Time synced. Offset: {self.time_offset}ms (Server: {server_time}, Local: {local_time})")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error syncing time: {e}")
+            
+        return False
 
     # ------------------------------------------------------------------
     # Signature Generation
@@ -74,7 +106,8 @@ class ZoomexClient(BaseExchangeClient):
 
     def _get_auth_headers(self, payload: str = "") -> Dict[str, str]:
         """Generate authentication headers for Zoomex API."""
-        timestamp = str(int(time.time() * 1000))
+        # Use synchronized time
+        timestamp = str(int((time.time() * 1000) + self.time_offset))
         signature = self._generate_signature(timestamp, payload)
         
         return {
